@@ -1,4 +1,4 @@
-```markdown
+
 # ComfyUI-TBG-SAM3
 
 A ComfyUI custom node extension integrating Meta's **Segment Anything Model 3 (SAM 3)** for advanced image and video segmentation capabilities. This extension provides production-ready nodes compatible with ComfyUI’s Impact Pack SEGS format, enabling text-prompt, point-based, and mask-driven segmentation as well as depth map generation per segment or for full images.
