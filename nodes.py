@@ -107,77 +107,105 @@ class SAM3Segmentation:
         try:
             segmenter = sam3_model["segmenter"]
 
-            # Handle batch
+            # Handle batch - process all images
             if len(image.shape) == 4:
-                img = image[0]
+                batch_size = image.shape[0]
+                images = image
             else:
-                img = image
+                batch_size = 1
+                images = image.unsqueeze(0)
 
-            h, w, c = img.shape
+            all_vis_images = []
+            all_combined_masks = []
+            all_segs = []
 
-            # Segment based on mode
-            if mode == "text":
-                if not text_prompt or text_prompt.strip() == "":
-                    text_prompt = "object"
+            # Process each image in batch
+            for batch_idx in range(batch_size):
+                img = images[batch_idx]
+                h, w, c = img.shape
 
-                results = segmenter.segment_with_text(img, text_prompt, threshold)
-                label = f"text:{text_prompt}"
+                # Get corresponding mask if provided
+                current_mask = None
+                if point_mask is not None:
+                    if len(point_mask.shape) == 3 and batch_idx < point_mask.shape[0]:
+                        current_mask = point_mask[batch_idx]
+                    elif len(point_mask.shape) == 2:
+                        current_mask = point_mask
 
-            elif mode == "points_from_mask":
-                if point_mask is None:
-                    raise ValueError("point_mask required for points_from_mask mode")
+                # Segment based on mode
+                if mode == "text":
+                    if not text_prompt or text_prompt.strip() == "":
+                        text_prompt = "object"
 
-                # Extract points
-                mask = point_mask[0] if len(point_mask.shape) == 3 else point_mask
-                points = segmenter.extract_points_from_mask(mask, num_points)
-
-                if len(points) == 0:
-                    # Empty result
-                    empty_segs = ((w, h), [])
-                    empty_mask = torch.zeros((1, h, w), dtype=torch.float32)
-                    return (empty_segs, image, empty_mask)
-
-                results = segmenter.segment_with_points(img, points)
-                label = "points"
-
-            else:  # auto
-                if text_prompt and text_prompt.strip() != "":
                     results = segmenter.segment_with_text(img, text_prompt, threshold)
-                    label = f"auto:text:{text_prompt}"
-                elif point_mask is not None:
-                    mask = point_mask[0] if len(point_mask.shape) == 3 else point_mask
-                    points = segmenter.extract_points_from_mask(mask, num_points)
-                    if len(points) > 0:
+                    label = f"text:{text_prompt}"
+
+                elif mode == "points_from_mask":
+                    if current_mask is None:
+                        raise ValueError("point_mask required for points_from_mask mode")
+
+                    # Extract points
+                    points = segmenter.extract_points_from_mask(current_mask, num_points)
+
+                    if len(points) == 0:
+                        # Empty result for this frame
+                        results = {"masks": [], "boxes": [], "scores": []}
+                        label = "points:empty"
+                    else:
                         results = segmenter.segment_with_points(img, points)
-                        label = "auto:points"
+                        label = "points"
+
+                else:  # auto
+                    if text_prompt and text_prompt.strip() != "":
+                        results = segmenter.segment_with_text(img, text_prompt, threshold)
+                        label = f"auto:text:{text_prompt}"
+                    elif current_mask is not None:
+                        points = segmenter.extract_points_from_mask(current_mask, num_points)
+                        if len(points) > 0:
+                            results = segmenter.segment_with_points(img, points)
+                            label = "auto:points"
+                        else:
+                            results = {"masks": [], "boxes": [], "scores": []}
+                            label = "auto:empty"
                     else:
                         results = {"masks": [], "boxes": [], "scores": []}
                         label = "auto:empty"
-                else:
-                    results = {"masks": [], "boxes": [], "scores": []}
-                    label = "auto:empty"
 
-            # Convert to SEGS
-            segs = convert_to_segs(
-                results["masks"],
-                results["boxes"],
-                results["scores"],
-                (h, w),
-                label
-            )
+                # Convert to SEGS
+                segs = convert_to_segs(
+                    results["masks"],
+                    results["boxes"],
+                    results["scores"],
+                    (h, w),
+                    label
+                )
+                all_segs.append(segs)
 
-            # Create combined mask
-            combined_mask = torch.zeros((h, w), dtype=torch.float32)
-            for mask in results["masks"]:
-                mask_2d = self._ensure_2d_mask(mask, (h, w))
-                combined_mask = torch.maximum(combined_mask, mask_2d)
+                # Create combined mask
+                combined_mask = torch.zeros((h, w), dtype=torch.float32)
+                for mask in results["masks"]:
+                    mask_2d = self._ensure_2d_mask(mask, (h, w))
+                    combined_mask = torch.maximum(combined_mask, mask_2d)
 
-            # Create visualization
-            vis_image = self._create_visualization(img, results["masks"])
+                all_combined_masks.append(combined_mask)
 
-            combined_mask = combined_mask.unsqueeze(0)  # [1, H, W]
+                # Create visualization
+                vis_image = self._create_visualization(img, results["masks"])
+                all_vis_images.append(vis_image.squeeze(0))
 
-            return (segs, vis_image, combined_mask)
+            # Stack results
+            if batch_size == 1:
+                final_segs = all_segs[0]
+                final_vis = all_vis_images[0].unsqueeze(0)
+                final_mask = all_combined_masks[0].unsqueeze(0)
+            else:
+                # For batches, return first SEGS (SEGS format doesn't support batches)
+                # but stack visualizations and masks
+                final_segs = all_segs[0]
+                final_vis = torch.stack(all_vis_images, dim=0)
+                final_mask = torch.stack(all_combined_masks, dim=0)
+
+            return (final_segs, final_vis, final_mask)
 
         except Exception as e:
             error_msg = f"SAM3 Segmentation Error:\n{str(e)}"
@@ -270,67 +298,88 @@ class SAM3DepthMap:
             if self.depth_estimator is None:
                 self.depth_estimator = DepthEstimator()
 
-            # Get first image
-            img = image[0] if len(image.shape) == 4 else image
-            h, w, c = img.shape
+            # Handle batch
+            if len(image.shape) == 4:
+                batch_size = image.shape[0]
+                images = image
+            else:
+                batch_size = 1
+                images = image.unsqueeze(0)
 
-            if mode == "full_image":
-                depth_map = self.depth_estimator.estimate_depth(img)
+            all_depth_images = []
+            all_depth_masks = []
 
-            else:  # per_segment
-                if segs is None:
-                    raise ValueError("SEGS required for per_segment mode")
+            # Process each image in batch
+            for batch_idx in range(batch_size):
+                img = images[batch_idx]
+                h, w, c = img.shape
 
-                (img_w, img_h), segs_list = segs
-
-                if len(segs_list) == 0:
+                if mode == "full_image":
                     depth_map = self.depth_estimator.estimate_depth(img)
-                else:
-                    depth_map = torch.zeros((h, w), dtype=torch.float32)
 
-                    for seg in segs_list:
-                        cropped_mask, crop_region, bbox, label, confidence = seg
-                        x, y, crop_w, crop_h = crop_region
+                else:  # per_segment
+                    if segs is None:
+                        raise ValueError("SEGS required for per_segment mode")
 
-                        # Create full mask
-                        full_mask = torch.zeros((h, w), dtype=torch.float32)
+                    (img_w, img_h), segs_list = segs
 
-                        # Resize cropped mask
-                        if cropped_mask.shape != (crop_h, crop_w):
-                            resized_mask = torch.nn.functional.interpolate(
-                                cropped_mask.unsqueeze(0).unsqueeze(0),
-                                size=(crop_h, crop_w),
-                                mode="nearest"
-                            ).squeeze()
-                        else:
-                            resized_mask = cropped_mask
+                    if len(segs_list) == 0:
+                        depth_map = self.depth_estimator.estimate_depth(img)
+                    else:
+                        depth_map = torch.zeros((h, w), dtype=torch.float32)
 
-                        # Place mask
-                        end_y = min(y + crop_h, h)
-                        end_x = min(x + crop_w, w)
-                        actual_h = end_y - y
-                        actual_w = end_x - x
+                        for seg in segs_list:
+                            cropped_mask, crop_region, bbox, label, confidence = seg
+                            x, y, crop_w, crop_h = crop_region
 
-                        full_mask[y:end_y, x:end_x] = resized_mask[:actual_h, :actual_w]
+                            # Create full mask
+                            full_mask = torch.zeros((h, w), dtype=torch.float32)
 
-                        # Generate depth for segment
-                        seg_depth = self.depth_estimator.estimate_depth(img, full_mask)
-                        depth_map = torch.maximum(depth_map, seg_depth)
+                            # Resize cropped mask
+                            if cropped_mask.shape != (crop_h, crop_w):
+                                resized_mask = torch.nn.functional.interpolate(
+                                    cropped_mask.unsqueeze(0).unsqueeze(0),
+                                    size=(crop_h, crop_w),
+                                    mode="nearest"
+                                ).squeeze()
+                            else:
+                                resized_mask = cropped_mask
 
-            # Normalize
-            if normalize:
-                depth_min = depth_map.min()
-                depth_max = depth_map.max()
-                if depth_max > depth_min:
-                    depth_map = (depth_map - depth_min) / (depth_max - depth_min)
+                            # Place mask
+                            end_y = min(y + crop_h, h)
+                            end_x = min(x + crop_w, w)
+                            actual_h = end_y - y
+                            actual_w = end_x - x
 
-            # Convert to image [1, H, W, C]
-            depth_image = depth_map.unsqueeze(-1).repeat(1, 1, 3).unsqueeze(0)
+                            full_mask[y:end_y, x:end_x] = resized_mask[:actual_h, :actual_w]
 
-            # Also return as mask [1, H, W]
-            depth_mask = depth_map.unsqueeze(0)
+                            # Generate depth for segment
+                            seg_depth = self.depth_estimator.estimate_depth(img, full_mask)
+                            depth_map = torch.maximum(depth_map, seg_depth)
 
-            return (depth_image, depth_mask)
+                # Normalize
+                if normalize:
+                    depth_min = depth_map.min()
+                    depth_max = depth_map.max()
+                    if depth_max > depth_min:
+                        depth_map = (depth_map - depth_min) / (depth_max - depth_min)
+
+                # Convert to image [H, W, C]
+                depth_image = depth_map.unsqueeze(-1).repeat(1, 1, 3)
+                all_depth_images.append(depth_image)
+
+                # Also as mask [H, W]
+                all_depth_masks.append(depth_map)
+
+            # Stack results
+            if batch_size == 1:
+                final_depth_image = all_depth_images[0].unsqueeze(0)  # [1, H, W, C]
+                final_depth_mask = all_depth_masks[0].unsqueeze(0)    # [1, H, W]
+            else:
+                final_depth_image = torch.stack(all_depth_images, dim=0)  # [B, H, W, C]
+                final_depth_mask = torch.stack(all_depth_masks, dim=0)    # [B, H, W]
+
+            return (final_depth_image, final_depth_mask)
 
         except Exception as e:
             error_msg = f"Depth Generation Error:\n{str(e)}"
