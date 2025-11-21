@@ -1,4 +1,4 @@
-**This is just the first version, so please be patient—there’s still a lot to fix and improve before it’s production-ready.**
+**This is was a the first version for testing .... get this version for now https://github.com/PozzettiAndrea/ComfyUI-SAM3**
 
 # ComfyUI-TBG-SAM3
 
