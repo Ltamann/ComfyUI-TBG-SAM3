@@ -29,7 +29,7 @@ Documentation = "https://github.com/Ltamann/ComfyUI-TBG-SAM3/wiki"
 "Bug Tracker" = "https://github.com/Ltamann/ComfyUI-TBG-SAM3/issues"
 
 [tool.comfy]
-PublisherId = ""
+PublisherId = "tbg"
 DisplayName = "ComfyUI-TBG-SAM3"
 Icon = ""
 includes = [] 
