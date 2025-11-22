@@ -4,13 +4,16 @@ import os
 
 DEPENDENCIES = [
     "timm>=1.0.17",
-    "numpy>=1.26",           # Will pick the newest that exists for your Python
+    "numpy>=1.26",  # Will pick the newest that exists for your Python
     "tqdm",
     "ftfy>=6.1.1",
     "regex",
     "iopath>=0.1.10",
     "typing_extensions",
-    "huggingface_hub"
+    # Match transformers requirement: >=0.34.0,<1.0
+    "huggingface_hub>=0.39.0,<1.0",
+    # Optional but recommended: keep transformers itself in a safe range
+    "transformers>=4.40.0,<5.0.0",
 ]
 
 def run(cmd, desc):
