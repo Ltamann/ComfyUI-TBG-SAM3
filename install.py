@@ -45,7 +45,7 @@ def main():
     # Step 3: Install SAM3 in editable mode, no dependency check
     run(
         [sys.executable, "-m", "pip", "install", "-e", "./sam3", "--no-deps"],
-        "Install SAM3 (editable, no deps)"
+        "Install SAM3 (editable, no deps)",
     )
 
     # Use plain ASCII to avoid UnicodeEncodeError on Windows consoles
