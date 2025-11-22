@@ -279,6 +279,21 @@ class TBGSam3Segmentation:
                     "step": 0.1,
                     "tooltip": "Crop factor used when building combined SEGS (Impact Pack style). 1.0 = tight bbox."
                 }),
+                "min_size": ("INT", {
+                    "default": 100,
+                    "min": 1,
+                    "max": 500,
+                    "step": 1,
+                    "display": "slider",
+                    "tooltip": "Minimum segment size in pixels as a square side. 1=1x1, 200=200x200; smaller masks are discarded."
+                }),
+                "fill_holes": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "Fill Holes",
+                    "label_off": "Keep Holes",
+                    "tooltip": "When enabled, fills holes inside each mask (solid segments)."
+                }),
+
             },
             "optional": {
                 "text_prompt": ("STRING", {
@@ -303,9 +318,10 @@ class TBGSam3Segmentation:
     CATEGORY = "TBG/SAM3"
 
     def segment(self, sam3_model, image, confidence_threshold=0.2, detect_all=True,
-                pipeline_mode="all", instances=False, crop_factor=1.0, text_prompt="",
-                sam3_selectors_pipe=None, mask_prompt=None, exemplar_box=None,
-                exemplar_mask=None, max_detections=10):
+                pipeline_mode="all", instances=False, crop_factor=1.5, min_size=32,
+                fill_holes=False, text_prompt="", sam3_selectors_pipe=None,
+                mask_prompt=None, exemplar_box=None, exemplar_mask=None,
+                max_detections=10):
 
         actual_max_detections = -1 if detect_all else max_detections
 
@@ -429,6 +445,41 @@ class TBGSam3Segmentation:
         if boxes is not None:
             print(f"[SAM3 DEBUG] Output boxes shape: {boxes.shape}")
 
+        # --- Filter out segments smaller than min_size x min_size ---
+        if masks is not None and masks.numel() > 0 and min_size > 1:
+            import torch as _torch
+
+            # Convert side length to minimum area
+            min_area = float(min_size * min_size)
+
+            # Flatten masks to [N,H,W] for area computation
+            if masks.dim() == 4 and masks.shape[1] == 1:
+                masks_flat = masks[:, 0, :, :]
+            elif masks.dim() == 3:
+                masks_flat = masks
+            elif masks.dim() == 4:
+                masks_flat = masks.mean(dim=1)
+            else:
+                raise ValueError(f"[SAM3] Unexpected masks shape for min_size filter: {masks.shape}")
+
+            binary = (masks_flat > 0.5).float()
+            areas = binary.view(binary.shape[0], -1).sum(dim=1)
+
+            keep_indices = (areas >= min_area).nonzero(as_tuple=False).view(-1)
+            print(f"[SAM3] min_size={min_size}px -> min_area={min_area} px, keeping {keep_indices.numel()} of {binary.shape[0]} masks")
+
+            if keep_indices.numel() > 0:
+                masks = masks[keep_indices]
+                boxes = boxes[keep_indices] if boxes is not None else None
+                scores = scores[keep_indices] if scores is not None else None
+            else:
+                print("[SAM3] All detections removed by min_size filter; returning empty result")
+                h, w = pil_image.size[1], pil_image.size[0]
+                empty_mask = _torch.zeros(1, h, w, device=masks.device)
+                empty_segs = ((height, width), [])
+                offload_model_if_needed(sam3_model)
+                return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs)
+
         if masks is None or len(masks) == 0:
             print(f"[SAM3] No detections found at threshold {confidence_threshold}")
             h, w = pil_image.size[1], pil_image.size[0]
@@ -529,8 +580,82 @@ class TBGSam3Segmentation:
                 boxes = boxes[top_indices] if boxes is not None else None
                 scores = scores[top_indices] if scores is not None else None
 
-        # --- Build outputs ---
+        # --- Optional: fill holes inside each mask (per-segment, safe) ---
+        if fill_holes and isinstance(masks, torch.Tensor) and masks.numel() > 0:
+            import cv2
+            import numpy as np
 
+            device = masks.device
+
+            # Normalize to [N,H,W] float on CPU
+            if masks.dim() == 4 and masks.shape[1] == 1:
+                masks_flat = masks[:, 0, :, :].detach().cpu()
+            elif masks.dim() == 3:
+                masks_flat = masks.detach().cpu()
+            elif masks.dim() == 4:
+                masks_flat = masks.mean(dim=1).detach().cpu()
+            else:
+                raise ValueError(f"[SAM3] Unexpected masks shape for fill_holes: {masks.shape}")
+
+            filled_list = []
+            for idx in range(masks_flat.shape[0]):
+                m = masks_flat[idx].numpy()  # [H,W], float32
+
+                # Binary foreground: 1 = segment, 0 = background
+                fg = (m > 0.5).astype(np.uint8)
+                if fg.sum() == 0:
+                    filled_list.append(fg.astype(np.float32))
+                    continue
+
+                h, w = fg.shape
+
+                # Tight bbox of the segment
+                ys, xs = np.where(fg == 1)
+                y1, y2 = ys.min(), ys.max()
+                x1, x2 = xs.min(), xs.max()
+
+                crop_fg = fg[y1:y2 + 1, x1:x2 + 1]  # foreground inside bbox
+                ch, cw = crop_fg.shape
+
+                # Background inside bbox
+                inv = 1 - crop_fg  # 1 = background inside bbox
+
+                # Flood fill background from crop border to find outer background
+                inv_ff = inv.copy()
+                mask_ff = np.zeros((ch + 2, cw + 2), np.uint8)
+
+                # Flood from all 4 corners of the crop
+                cv2.floodFill(inv_ff, mask_ff, (0, 0), 2)
+                cv2.floodFill(inv_ff, mask_ff, (cw - 1, 0), 2)
+                cv2.floodFill(inv_ff, mask_ff, (0, ch - 1), 2)
+                cv2.floodFill(inv_ff, mask_ff, (cw - 1, ch - 1), 2)
+
+                # Outer background: inv_ff == 2
+                outer_bg = (inv_ff == 2).astype(np.uint8)
+
+                # Holes: background pixels not connected to border
+                holes = inv - outer_bg
+                holes[holes < 0] = 0
+
+                # Fill holes into foreground
+                filled_crop = crop_fg + holes
+                filled_crop = np.clip(filled_crop, 0, 1).astype(np.uint8)
+
+                # Put back into full-size mask
+                filled_full = fg.copy()
+                filled_full[y1:y2 + 1, x1:x2 + 1] = filled_crop
+
+                filled_list.append(filled_full.astype(np.float32))
+
+            filled_stack = torch.from_numpy(np.stack(filled_list, axis=0)).to(device)  # [N,H,W]
+
+            # Restore original mask tensor shape
+            if masks.dim() == 4 and masks.shape[1] == 1:
+                masks = filled_stack.unsqueeze(1)  # [N,1,H,W]
+            else:
+                masks = filled_stack  # [N,H,W]
+
+        # --- Build outputs ---
         comfy_masks = masks_to_comfy_mask(masks)
 
         # Combined full-image mask: union of all instance masks

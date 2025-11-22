@@ -11,12 +11,14 @@ The extension provides both combined and separated mask outputs, offers producti
 
 - **SAM3 Model Loader and Downloader**: Simple loader for local, cached models plus an advanced loader that can auto-download sam3.pt from Hugging Face into models/sam3 and reuse it across sessions.
 - **SAM3 Instance Filtering Switch**: Optional instances toggle to either return all SAM3 detections or keep only detections that overlap positive boxes / contain positive points, giving clean “instance‑aware” outputs when needed.
+- **Min-Size Filter**: Removes segments smaller than a specified size to clean up the final result.
+- **Fill Holes**: Automatically fills in empty regions within segmented areas.
 - **Unified Prompt Segmentation**: Segmentation driven by text, interactive points, and boxes via a single prompt pipeline 
 - **Text-Prompt Segmentation**: Semantic segmentation using flexible open vocabulary text prompts.
 - **Point, Box & Mask Guidance**: Support for positive/negative points, positive/negative boxes, and optional input masks to refine or restrict SAM3 predictions.
-- **TBG‑ETUR Upscaler Compatibility**: SEGS format and shapes are aligned with TBG‑ETUR’s tiler/upscaler (no zero‑sized masks, consistent SEG.cropped_mask and SEG.crop_region), so SAM3 segments can be passed straight into the Upscaler/Refiner workflows.
-- **Impact Pack Compatible SEGS Outputs**: Per-instance SEGS built via mask_to_segs (one SEG per contour / detection). Combined full-image mask plus combined SEGS using the same Impact-Pack SEG structure for seamless use with detailers and other SEGS nodes.
-- **Configurable Crop Factor for SEGS**: User-controlled crop_factor input to tune how tightly Impact-Pack SEG crop regions wrap around their masks, matching Impact Pack behavior.
+- **TBG‑ETUR Upscaler Compatibility**: SEGS format and shapes are aligned with TBG‑ETUR’s tiler/upscaler (no zero‑sized masks, consistent SEG.cropped_mask and SEG.crop_region), so SAM3 segments can be passed straight into the Upscaler/Refiner workflows. [ComfyUI-TBG-ETUR](https://github.com/Ltamann/ComfyUI-TBG-ETUR)
+- **Impact Pack Compatible SEGS Outputs**: Per-instance SEGS built via mask_to_segs (one SEG per contour / detection). Combined full-image mask plus combined SEGS using the same Impact-Pack SEG structure for seamless use with detailers and other SEGS nodes.  [ComfyUI-Impact-Pack](https://github.com/ltdrdata/ComfyUI-Impact-Pack) 
+- **Configurable Crop Factor for SEGS**: User-controlled crop_factor input to tune how tightly Impact-Pack SEG crop regions wrap around their masks, matching Impact Pack behavior. 
 - **Flexible Pipeline Modes**: Switch between all prompts, boxes-only, points-only, positive-only, negative-only (and variants) to control how selectors influence segmentation.
 - **Interactive Prompt Collector Node**: Web‑UI node that displays the image, lets you draw points and boxes, and normalizes them into a reusable SAM3 prompt pipeline.
 - **CUDA and CPU Support**: Efficient usage of available GPU or fallback to CPU.
