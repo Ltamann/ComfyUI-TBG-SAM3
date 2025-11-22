@@ -10,77 +10,7 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 from PIL import Image
 
-from transformers import Sam3TrackerModel, Sam3TrackerProcessor  # new import
 
-
-class HF_SAM3PointSegmenter:
-    """SAM3 point-based segmentation using HF Sam3TrackerModel / Sam3TrackerProcessor."""
-
-    def __init__(self, device: str = "cuda", model_id: str = "facebook/sam3"):
-        self.device = device if torch.cuda.is_available() else "cpu"
-        self.model_id = model_id
-        self.model = None
-        self.processor = None
-        self._load_model()
-
-    def _load_model(self):
-        print(f"[HF_SAM3] Loading HF SAM3 tracker '{self.model_id}' on {self.device}...")
-        try:
-            self.processor = Sam3TrackerProcessor.from_pretrained(self.model_id)
-            self.model = Sam3TrackerModel.from_pretrained(self.model_id).to(self.device)
-            self.model.eval()
-            print("[HF_SAM3] ✓ Tracker model loaded.")
-        except Exception as e:
-            raise RuntimeError(f"Failed to load HF SAM3 tracker: {e}")
-
-    def segment_with_points(
-        self,
-        image,
-        points_xy: List[Tuple[int, int]],
-        point_labels: Optional[List[int]] = None,
-    ):
-        """
-        Segment using click points (pixel coords, x/y in original image space).
-
-        points_xy: List of (x, y) integer pixel coordinates.
-        point_labels: Optional List[int] (1 = positive, 0 = negative).
-        """
-        if point_labels is None:
-            point_labels = [1] * len(points_xy)
-
-        if isinstance(image, torch.Tensor):
-            pil_image = tensor_to_pil(image)
-        else:
-            pil_image = image
-
-        # HF expects [batch][objects][points][2] and [batch][objects][points]
-        input_points = [[[list(p) for p in points_xy]]]
-        input_labels = [[[int(l) for l in point_labels]]]
-
-        inputs = self.processor(
-            images=pil_image,
-            input_points=input_points,
-            input_labels=input_labels,
-            return_tensors="pt",
-        ).to(self.device)
-
-        with torch.no_grad():
-            outputs = self.model(**inputs)
-
-        # masks at original resolution
-        masks = self.processor.post_process_masks(
-            outputs.pred_masks.cpu(),
-            inputs["original_sizes"],
-        )[0]  # [num_inst, H, W]
-
-        # Optional: instance-level boxes/scores (if available)
-        boxes = []
-        scores = []
-        if hasattr(outputs, "pred_scores"):
-            scores = outputs.pred_scores[0].cpu().tolist()
-
-        print(f"[HF_SAM3] segment_with_points: masks={len(masks)}, scores={scores}")
-        return list(masks), boxes, scores
 
 
 try:
