@@ -2,7 +2,7 @@
 # Only packages NOT in ComfyUI standard installation
 
 # Hugging Face for model downloading
-huggingface_hub>=0.39.0,<1.0
+huggingface_hub>=0.36.0
 
 # OpenCV for image/video processing
 opencv-python>=4.8.0
