@@ -10,6 +10,79 @@ from pathlib import Path
 from typing import Optional, Tuple, List, Dict, Any
 from PIL import Image
 
+from transformers import Sam3TrackerModel, Sam3TrackerProcessor  # new import
+
+
+class HF_SAM3PointSegmenter:
+    """SAM3 point-based segmentation using HF Sam3TrackerModel / Sam3TrackerProcessor."""
+
+    def __init__(self, device: str = "cuda", model_id: str = "facebook/sam3"):
+        self.device = device if torch.cuda.is_available() else "cpu"
+        self.model_id = model_id
+        self.model = None
+        self.processor = None
+        self._load_model()
+
+    def _load_model(self):
+        print(f"[HF_SAM3] Loading HF SAM3 tracker '{self.model_id}' on {self.device}...")
+        try:
+            self.processor = Sam3TrackerProcessor.from_pretrained(self.model_id)
+            self.model = Sam3TrackerModel.from_pretrained(self.model_id).to(self.device)
+            self.model.eval()
+            print("[HF_SAM3] ✓ Tracker model loaded.")
+        except Exception as e:
+            raise RuntimeError(f"Failed to load HF SAM3 tracker: {e}")
+
+    def segment_with_points(
+        self,
+        image,
+        points_xy: List[Tuple[int, int]],
+        point_labels: Optional[List[int]] = None,
+    ):
+        """
+        Segment using click points (pixel coords, x/y in original image space).
+
+        points_xy: List of (x, y) integer pixel coordinates.
+        point_labels: Optional List[int] (1 = positive, 0 = negative).
+        """
+        if point_labels is None:
+            point_labels = [1] * len(points_xy)
+
+        if isinstance(image, torch.Tensor):
+            pil_image = tensor_to_pil(image)
+        else:
+            pil_image = image
+
+        # HF expects [batch][objects][points][2] and [batch][objects][points]
+        input_points = [[[list(p) for p in points_xy]]]
+        input_labels = [[[int(l) for l in point_labels]]]
+
+        inputs = self.processor(
+            images=pil_image,
+            input_points=input_points,
+            input_labels=input_labels,
+            return_tensors="pt",
+        ).to(self.device)
+
+        with torch.no_grad():
+            outputs = self.model(**inputs)
+
+        # masks at original resolution
+        masks = self.processor.post_process_masks(
+            outputs.pred_masks.cpu(),
+            inputs["original_sizes"],
+        )[0]  # [num_inst, H, W]
+
+        # Optional: instance-level boxes/scores (if available)
+        boxes = []
+        scores = []
+        if hasattr(outputs, "pred_scores"):
+            scores = outputs.pred_scores[0].cpu().tolist()
+
+        print(f"[HF_SAM3] segment_with_points: masks={len(masks)}, scores={scores}")
+        return list(masks), boxes, scores
+
+
 try:
     import folder_paths
 except ImportError:
@@ -59,13 +132,13 @@ class SAM3ImageSegmenter:
 
     def _load_model(self, model_path: Optional[str] = None):
         """Load SAM3 model - supports both API and local loading"""
+
         try:
             # Import SAM3 modules
-            try:
-                from sam3.model_builder import build_sam3_image_model
-                from sam3.model.sam3_image_processor import Sam3Processor
-            except ImportError:
-                from sam3 import build_sam3_image_model, Sam3Processor
+
+            from sam3.model_builder import build_sam3_image_model
+            from sam3.model.sam3_image_processor import Sam3Processor
+
 
             print(f"[SAM3] Loading SAM3 image model on {self.device}...")
 
@@ -120,47 +193,50 @@ class SAM3ImageSegmenter:
 
         return output["masks"], output["boxes"], output["scores"]
 
-    def segment_with_points(self, image, points: List[Tuple[int, int]],
-                           point_labels: Optional[List[int]] = None):
-        """Segment using point prompts"""
+    def segment_with_points(
+            self,
+            image,
+            points: List[Tuple[int, int]],
+            point_labels: Optional[List[int]] = None,
+    ):
         if point_labels is None:
             point_labels = [1] * len(points)
 
+        # Ensure PIL
         if isinstance(image, torch.Tensor):
             pil_image = tensor_to_pil(image)
         else:
             pil_image = image
 
-        inference_state = self.processor.set_image(pil_image)
-        output = self.processor.set_point_prompt(
-            state=inference_state,
-            points=points,
-            labels=point_labels
-        )
+        # SAM3 expects 4D nested lists: [batch][num_objs][num_points][2]
+        input_points = [[[list(p) for p in points]]]  # shape conceptually [1, 1, N, 2]
+        input_labels = [[[int(l) for l in point_labels]]]  # shape [1, 1, N]
 
-        return output["masks"], output["boxes"], output["scores"]
+        inputs = self.processor(
+            images=pil_image,
+            input_points=input_points,
+            input_labels=input_labels,
+            return_tensors="pt",
+        ).to(self.device)
 
-    def extract_points_from_mask(self, mask: torch.Tensor, num_points: int = 5) -> List[Tuple[int, int]]:
-        if isinstance(mask, torch.Tensor):
-            mask_np = mask.cpu().numpy()
-        else:
-            mask_np = np.array(mask)
+        with torch.no_grad():
+            outputs = self.model(**inputs)
 
-        mask_np = mask_np.squeeze()
-        y_coords, x_coords = np.where(mask_np > 0.5)
-        total_points = len(y_coords)
-        if total_points == 0:
-            print("[SAM3] extract_points_from_mask: No foreground pixels found in mask!")
-            return []
+        # Post‑process; SAM3 examples typically use target_sizes / original_sizes from inputs
+        results = self.processor.post_process_instance_segmentation(
+            outputs=outputs,
+            threshold=0.1,
+            mask_threshold=0.1,
+            target_sizes=inputs.get("original_sizes").tolist(),
+        )[0]
 
-        if total_points <= num_points:
-            indices = range(total_points)
-        else:
-            indices = np.linspace(0, total_points - 1, num_points, dtype=int)
+        masks = results["masks"]  # [num_inst, H, W]
+        boxes = results.get("boxes", [])
+        scores = results.get("scores", [])
 
-        points = [(int(x_coords[i]), int(y_coords[i])) for i in indices]
-        print(f"[SAM3] extract_points_from_mask: returning {len(points)} points.")
-        return points
+        return masks, boxes, scores
+
+
 
 
 class DepthEstimator:
@@ -303,3 +379,293 @@ def convert_to_segs(
         segs.append(seg)
 
     return ((w, h), segs)
+
+def extract_points_from_mask(mask: torch.Tensor, num_points: int = 5) -> List[Tuple[int, int]]:
+    """Convert a binary/soft mask into a list of (x, y) points."""
+    if isinstance(mask, torch.Tensor):
+        mask_np = mask.cpu().numpy()
+    else:
+        mask_np = np.array(mask)
+
+    mask_np = mask_np.squeeze()
+    y_coords, x_coords = np.where(mask_np > 0.5)
+    total_points = len(y_coords)
+
+    if total_points == 0:
+        print("[SAM3] extract_points_from_mask: No foreground pixels found in mask!")
+        return []
+
+    if total_points <= num_points:
+        indices = range(total_points)
+    else:
+        indices = np.linspace(0, total_points - 1, num_points, dtype=int)
+
+    points = [(int(x_coords[i]), int(y_coords[i])) for i in indices]
+    print(f"[SAM3] extract_points_from_mask: returning {len(points)} points.")
+    return points
+
+"""
+Utility functions for ComfyUI-SAM3 nodes
+"""
+import os
+import torch
+import numpy as np
+from PIL import Image
+from pathlib import Path
+
+
+def get_comfy_models_dir():
+    """Get the ComfyUI models directory"""
+    # Try to find ComfyUI root by going up from custom_nodes
+    current = Path(__file__).parent.parent.absolute()  # ComfyUI-SAM3
+    comfy_custom_nodes = current.parent  # custom_nodes
+    comfy_root = comfy_custom_nodes.parent  # ComfyUI root
+
+    models_dir = comfy_root / "models" / "sam3"
+    models_dir.mkdir(parents=True, exist_ok=True)
+
+    return str(models_dir)
+
+
+def comfy_image_to_pil(image):
+    """
+    Convert ComfyUI image tensor to PIL Image
+
+    Args:
+        image: ComfyUI image tensor [B, H, W, C] in range [0, 1]
+
+    Returns:
+        PIL Image
+    """
+    # ComfyUI images are [B, H, W, C] in range [0, 1]
+    if isinstance(image, torch.Tensor):
+        # Take first image if batch
+        if image.dim() == 4:
+            image = image[0]
+
+        # Convert to numpy
+        img_np = image.cpu().numpy()
+
+        # Convert from [0, 1] to [0, 255]
+        img_np = (img_np * 255).astype(np.uint8)
+
+        # Convert to PIL
+        pil_image = Image.fromarray(img_np)
+        return pil_image
+
+    return image
+
+
+def pil_to_comfy_image(pil_image):
+    """
+    Convert PIL Image to ComfyUI image tensor
+
+    Args:
+        pil_image: PIL Image
+
+    Returns:
+        ComfyUI image tensor [1, H, W, C] in range [0, 1]
+    """
+    # Convert to RGB if needed
+    if pil_image.mode != 'RGB':
+        pil_image = pil_image.convert('RGB')
+
+    # Convert to numpy array
+    img_np = np.array(pil_image).astype(np.float32)
+
+    # Normalize to [0, 1]
+    img_np = img_np / 255.0
+
+    # Convert to tensor [H, W, C]
+    img_tensor = torch.from_numpy(img_np)
+
+    # Add batch dimension [1, H, W, C]
+    img_tensor = img_tensor.unsqueeze(0)
+
+    return img_tensor
+
+
+def masks_to_comfy_mask(masks):
+    """
+    Convert SAM3 masks to ComfyUI mask format
+
+    Args:
+        masks: torch.Tensor [N, H, W] or [N, 1, H, W] binary masks
+
+    Returns:
+        ComfyUI mask tensor [N, H, W] in range [0, 1] on CPU
+    """
+    if isinstance(masks, torch.Tensor):
+        # Ensure float type and range [0, 1]
+        masks = masks.float()
+        if masks.max() > 1.0:
+            masks = masks / 255.0
+
+        # Squeeze extra channel dimension if present (N, 1, H, W) -> (N, H, W)
+        if masks.ndim == 4 and masks.shape[1] == 1:
+            masks = masks.squeeze(1)
+
+        # Move to CPU to ensure compatibility with downstream nodes
+        return masks.cpu()
+    elif isinstance(masks, np.ndarray):
+        masks = torch.from_numpy(masks).float()
+        if masks.max() > 1.0:
+            masks = masks / 255.0
+
+        # Squeeze extra channel dimension if present
+        if masks.ndim == 4 and masks.shape[1] == 1:
+            masks = masks.squeeze(1)
+
+        # Already on CPU since from numpy
+        return masks
+
+    return masks
+
+
+def visualize_masks_on_image(image, masks, boxes=None, scores=None, alpha=0.5):
+    """
+    Create visualization of masks overlaid on image
+
+    Args:
+        image: PIL Image or numpy array
+        masks: torch.Tensor [N, H, W] binary masks
+        boxes: Optional torch.Tensor [N, 4] bounding boxes in [x0, y0, x1, y1]
+        scores: Optional torch.Tensor [N] confidence scores
+        alpha: Transparency of mask overlay
+
+    Returns:
+        PIL Image with visualization
+    """
+    if isinstance(image, torch.Tensor):
+        image = comfy_image_to_pil(image)
+    elif isinstance(image, np.ndarray):
+        image = Image.fromarray((image * 255).astype(np.uint8) if image.max() <= 1.0 else image.astype(np.uint8))
+
+    # Convert to numpy for processing
+    img_np = np.array(image).astype(np.float32) / 255.0
+
+    # Resize masks to image size if needed
+    if isinstance(masks, torch.Tensor):
+        masks_np = masks.cpu().numpy()
+    else:
+        masks_np = masks
+
+    # Create colored overlay
+    np.random.seed(42)  # Consistent colors
+    overlay = img_np.copy()
+
+    for i, mask in enumerate(masks_np):
+        # Squeeze extra dimensions (masks may be [1, H, W] or [H, W])
+        while mask.ndim > 2:
+            mask = mask.squeeze(0)
+
+        # Resize mask to image size if needed
+        if mask.shape != img_np.shape[:2]:
+            from PIL import Image as PILImage
+            mask_pil = PILImage.fromarray((mask * 255).astype(np.uint8))
+            mask_pil = mask_pil.resize((img_np.shape[1], img_np.shape[0]), PILImage.NEAREST)
+            mask = np.array(mask_pil).astype(np.float32) / 255.0
+
+        # Random color for this mask
+        color = np.random.rand(3)
+
+        # Apply colored mask
+        for c in range(3):
+            overlay[:, :, c] = np.where(
+                mask > 0.5,
+                overlay[:, :, c] * (1 - alpha) + color[c] * alpha,
+                overlay[:, :, c]
+            )
+
+    # Convert back to PIL
+    result = Image.fromarray((overlay * 255).astype(np.uint8))
+
+    # Draw boxes if provided
+    if boxes is not None:
+        from PIL import ImageDraw, ImageFont
+        draw = ImageDraw.Draw(result)
+
+        if isinstance(boxes, torch.Tensor):
+            boxes_np = boxes.cpu().numpy()
+        else:
+            boxes_np = boxes
+
+        for i, box in enumerate(boxes_np):
+            x0, y0, x1, y1 = box
+
+            # Random color for this box (same seed for consistency)
+            np.random.seed(42 + i)
+            color_int = tuple((np.random.rand(3) * 255).astype(int).tolist())
+
+            # Draw box
+            draw.rectangle([x0, y0, x1, y1], outline=color_int, width=3)
+
+            # Draw score if provided
+            if scores is not None:
+                score = scores[i] if isinstance(scores, (list, np.ndarray)) else scores[i].item()
+                text = f"{score:.2f}"
+                draw.text((x0, y0 - 15), text, fill=color_int)
+
+    return result
+
+
+def tensor_to_list(tensor):
+    """Convert torch tensor to python list"""
+    if isinstance(tensor, torch.Tensor):
+        return tensor.cpu().tolist()
+    return tensor
+
+
+def ensure_model_on_device(sam3_model, target_device=None):
+    """
+    Ensure model is on the target device before inference
+
+    Args:
+        sam3_model: Model dict from LoadSAM3Model
+        target_device: Target device (uses original_device if None)
+
+    Returns:
+        None (modifies model dict in place)
+    """
+    model = sam3_model["model"]
+    processor = sam3_model["processor"]
+
+    if target_device is None:
+        target_device = sam3_model["original_device"]
+
+    # Check if model is already on target device
+    current_device = next(model.parameters()).device
+    if str(current_device) != target_device:
+        print(f"[SAM3] Moving model from {current_device} to {target_device}")
+        model.to(target_device)
+        processor.device = target_device
+        sam3_model["device"] = target_device
+
+
+def offload_model_if_needed(sam3_model):
+    """
+    Offload model to CPU if use_gpu_cache is False
+
+    Args:
+        sam3_model: Model dict from LoadSAM3Model
+
+    Returns:
+        None (modifies model dict in place)
+    """
+    use_gpu_cache = sam3_model.get("use_gpu_cache", True)
+
+    if not use_gpu_cache:
+        model = sam3_model["model"]
+        processor = sam3_model["processor"]
+        current_device = next(model.parameters()).device
+
+        # Only offload if currently on GPU
+        if "cuda" in str(current_device):
+            print(f"[SAM3] Offloading model to CPU to free VRAM")
+            model.to("cpu")
+            processor.device = "cpu"
+            sam3_model["device"] = "cpu"
+            # Force garbage collection to free VRAM
+            torch.cuda.empty_cache()
+            import gc
+            gc.collect()

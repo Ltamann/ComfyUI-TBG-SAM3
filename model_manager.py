@@ -7,7 +7,7 @@ import os
 from pathlib import Path
 from typing import List, Optional, Tuple
 import folder_paths
-
+from huggingface_hub import hf_hub_download
 # Define SAM3 model subfolder
 SAM3_MODELS_DIR = "sam3"
 
@@ -26,16 +26,12 @@ def get_sam3_models_path() -> str:
 
     return sam3_path
 
-
 def get_available_models() -> List[str]:
     """
-    Get list of available SAM3 model checkpoints
-    Returns list of model filenames
+    Get list of available SAM3 model checkpoints (files directly under models/sam3)
     """
     sam3_path = get_sam3_models_path()
-
-    # Supported model file extensions
-    extensions = ['.pt', '.pth', '.safetensors', '.bin']
+    extensions = [".pt", ".pth", ".safetensors", ".bin"]
 
     models = ["auto (download from HuggingFace)"]
 
@@ -45,6 +41,8 @@ def get_available_models() -> List[str]:
                 models.append(file)
 
     return models
+
+
 
 
 def get_model_path(model_name: str) -> Optional[str]:
@@ -64,52 +62,38 @@ def get_model_path(model_name: str) -> Optional[str]:
     return None
 
 
-def download_sam3_model(
-        model_name: str = "facebook/sam3",
-        save_dir: Optional[str] = None
-) -> str:
+def download_sam3_model(hf_repo: str = "facebook/sam3") -> str:
     """
-    Download SAM3 model from HuggingFace to local directory
-
-    Args:
-        model_name: HuggingFace model repo (e.g., "facebook/sam3")
-        save_dir: Directory to save model (defaults to models/sam3)
+    Download only the main SAM3 checkpoint (sam3.pt) into:
+        <models_dir>/sam3/sam3.pt
 
     Returns:
-        Path to downloaded model
+        The directory path containing sam3.pt (i.e. <models_dir>/sam3)
     """
-    try:
-        from huggingface_hub import snapshot_download, hf_hub_download
-    except ImportError:
-        raise ImportError(
-            "huggingface_hub required for downloading models.\n"
-            "Install: pip install huggingface_hub"
-        )
+    sam3_dir = get_sam3_models_path()  # e.g. .../models/sam3
+    os.makedirs(sam3_dir, exist_ok=True)
 
-    if save_dir is None:
-        save_dir = get_sam3_models_path()
+    local_ckpt_path = os.path.join(sam3_dir, "sam3.pt")
+    if os.path.isfile(local_ckpt_path):
+        print(f"[SAM3] Using existing checkpoint: {local_ckpt_path}")
+        return sam3_dir
 
-    print(f"[SAM3] Downloading {model_name} to {save_dir}...")
-    print("[SAM3] This may take several minutes...")
+    print(f"[SAM3] Downloading sam3.pt from {hf_repo} to {local_ckpt_path} ...")
 
-    try:
-        # Download entire model repository
-        local_path = snapshot_download(
-            repo_id=model_name,
-            cache_dir=save_dir,
-            local_dir=os.path.join(save_dir, "sam3_model"),
-            local_dir_use_symlinks=False
-        )
+    downloaded_path = hf_hub_download(
+        repo_id=hf_repo,
+        filename="sam3.pt",
+        revision="main",
+        local_dir=sam3_dir,
+        local_dir_use_symlinks=False,
+    )
 
-        print(f"[SAM3] Model downloaded successfully to: {local_path}")
-        return local_path
+    if downloaded_path != local_ckpt_path:
+        import shutil
+        shutil.move(downloaded_path, local_ckpt_path)
 
-    except Exception as e:
-        error_msg = f"Failed to download model: {str(e)}\n"
-        error_msg += "\nMake sure you:\n"
-        error_msg += "1. Have HuggingFace access token: huggingface-cli login\n"
-        error_msg += "2. Requested access at: https://huggingface.co/facebook/sam3\n"
-        raise RuntimeError(error_msg)
+    print(f"[SAM3] Model downloaded successfully to: {local_ckpt_path}")
+    return sam3_dir
 
 
 def get_model_info(model_name: str) -> dict:

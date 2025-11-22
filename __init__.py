@@ -81,5 +81,8 @@ except Exception as e:
 
 print("=" * 70)
 
+# Web directory for custom UI (interactive SAM3 detector)
+WEB_DIRECTORY = "./web"
+
 # CRITICAL: Export at module level
 __all__ = ['NODE_CLASS_MAPPINGS', 'NODE_DISPLAY_NAME_MAPPINGS']
