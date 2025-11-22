@@ -8,22 +8,22 @@ The ComfyUI-TBG-SAM3 update focuses on making SAM3 segmentation easier to use, m
 
 **Key Improvements**
 
--**Unified Point-and-Box Selector**
+- **Unified Point-and-Box Selector**
 The TBG SAM3 Selector now combines point and box selection into a single, streamlined tool. It supports both positive and negative prompts and keeps everything connected cleanly, making interactive segmentation much easier.
 
--**Enhanced Segmentation Logic + Instance Toggle**
+- **Enhanced Segmentation Logic + Instance Toggle**
 The TBG SAM3 Segmentation node now uses the official SAM3 segmentation workflow and includes a new switch that lets you turn off instance generation when you don’t need it.
 
--**Tile-Based TBG-ETUR Compatibility**
+- **Tile-Based TBG-ETUR Compatibility**
 Special output formats were added for full compatibility with TBG-ETUR’s tile-based upscaling workflow. This ensures stable, per-tile segmentation masks for high-resolution refinement.
 
--**Impact Pack SEGS Support**
+- **Impact Pack SEGS Support**
 The node now works directly with Impact Pack SEGS, making SAM3 usable in automated and multi-stage SEGS pipelines.
 
--**Unified Model folder with other SAM3 nodes**
+- **Unified Model folder with other SAM3 nodes**
 model at models/sam3/sam3.pt
 
-New Cleanup Tools
+- **New Cleanup Tools**
 
 Min-Size Filter: Removes tiny or unwanted segments below a defined size.
 
