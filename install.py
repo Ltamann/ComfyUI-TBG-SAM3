@@ -11,7 +11,7 @@ DEPENDENCIES = [
     "iopath>=0.1.10",
     "typing_extensions",
     # Match transformers requirement: >=0.34.0,<1.0
-    "huggingface_hub>=0.39.0,<1.0",
+    "huggingface_hub>0.36.0",
     # Optional but recommended: keep transformers itself in a safe range
     "transformers>=4.40.0,<5.0.0",
 ]
