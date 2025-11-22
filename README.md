@@ -24,9 +24,7 @@ The node now works directly with Impact Pack SEGS, making SAM3 usable in automat
 model at models/sam3/sam3.pt
 
 - **New Cleanup Tools**
-
 Min-Size Filter: Removes tiny or unwanted segments below a defined size.
-
 Fill Holes: Automatically fills empty gaps inside segmented regions.
 
 This update makes the TBG-SAM3 node set fully usable inside ComfyUI, adding better compatibility, improved segmentation handling, and practical cleanup features for all of us.
