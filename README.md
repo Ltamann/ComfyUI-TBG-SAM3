@@ -64,7 +64,9 @@ This update makes the TBG-SAM3 node set fully usable inside ComfyUI, adding bett
 3. If the nodes do not appear after installation, then SAM3 is likely not installed correctly in your environment. Check the installation logs and verify that the manual installation steps were completed properly inside your Python environment.
 
    git clone https://github.com/facebookresearch/sam3.git
+   
    cd sam3
+   
    pip install -e .
 
 ## Hugging Face Model Access Tutorial
