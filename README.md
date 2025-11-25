@@ -6,6 +6,11 @@ A ComfyUI custom-node extension that integrates Meta’s **Segment Anything Mode
 
 The ComfyUI-TBG-SAM3 update focuses on making SAM3 segmentation easier to use, more compatible with common workflows, and cleaner in its final output. The node set still uses the same three core nodes — TBG SAM3 ModelLoader & Downloader, TBG SAM3 Segmentation, and TBG SAM3 Selector — but each one has been improved.
 
+
+<img width="3012" height="1336" alt="Image" src="https://github.com/user-attachments/assets/d4813329-f378-4e70-b3b1-a0c8967b778c" />
+
+<img width="3125" height="1527" alt="Image" src="https://github.com/user-attachments/assets/ac4c35a4-63f8-4395-ba53-b7b1145230d5" />
+
 **Key Improvements**
 
 - **Unified Point-and-Box Selector**
