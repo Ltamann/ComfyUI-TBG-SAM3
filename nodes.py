@@ -6,7 +6,7 @@ All class names and functions prefixed with TBG for uniqueness.
 import torch
 from PIL import Image
 import numpy as np
-from typing import List
+
 import json
 import io
 import base64
@@ -19,10 +19,13 @@ from sam3_utils import (
     tensor_to_list,
     ensure_model_on_device,
     offload_model_if_needed,
+    DepthEstimator,
 )
 
 from .sam3_lib.model_builder import build_sam3_image_model, build_sam3_video_predictor
 from .sam3_lib.model.sam3_image_processor import Sam3Processor
+from typing import Tuple, Optional
+
 
 # Impact-Pack style MASK -> SEGS helper (your file in same folder)
 from .masktosegs import mask_to_segs, SEG
@@ -38,6 +41,7 @@ try:
     base_models_folder = folder_paths.models_dir
 except ImportError:
     base_models_folder = "models"
+
 
 
 
@@ -1306,13 +1310,141 @@ class TBGSAM3PromptCollector:
             "result": (pipeline,),
         }
 
+class SAM3DepthMap:
+    """Generate depth maps for images or segments"""
+
+    def __init__(self):
+        self.depth_estimator = None
+
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "image": ("IMAGE",),
+                "mode": (["full_image", "per_segment"], {"default": "full_image"}),
+                "normalize": ("BOOLEAN", {"default": True}),
+            },
+            "optional": {
+                "segs": ("SEGS",),
+            }
+        }
+
+    RETURN_TYPES = ("IMAGE", "MASK")
+    RETURN_NAMES = ("depth_image", "depth_mask")
+    FUNCTION = "generate_depth"
+    CATEGORY = "SAM3"
+    DESCRIPTION = "Generate depth maps. per_segment mode requires SEGS input."
+
+    def generate_depth(
+        self,
+        image: torch.Tensor,
+        mode: str,
+        normalize: bool = True,
+        segs: Optional[Tuple] = None
+    ) -> Tuple[torch.Tensor, torch.Tensor]:
+        """Generate depth map"""
+        try:
+            # Initialize depth estimator
+            if self.depth_estimator is None:
+                self.depth_estimator = DepthEstimator()
+
+            # Handle batch
+            if len(image.shape) == 4:
+                batch_size = image.shape[0]
+                images = image
+            else:
+                batch_size = 1
+                images = image.unsqueeze(0)
+
+            all_depth_images = []
+            all_depth_masks = []
+
+            # Process each image in batch
+            for batch_idx in range(batch_size):
+                img = images[batch_idx]
+                h, w, c = img.shape
+
+                if mode == "full_image":
+                    depth_map = self.depth_estimator.estimate_depth(img)
+
+                else:  # per_segment
+                    if segs is None:
+                        raise ValueError("SEGS required for per_segment mode")
+
+                    (img_w, img_h), segs_list = segs
+
+                    if len(segs_list) == 0:
+                        depth_map = self.depth_estimator.estimate_depth(img)
+                    else:
+                        depth_map = torch.zeros((h, w), dtype=torch.float32)
+
+                        for seg in segs_list:
+                            cropped_mask, crop_region, bbox, label, confidence = seg
+                            x, y, crop_w, crop_h = crop_region
+
+                            # Create full mask
+                            full_mask = torch.zeros((h, w), dtype=torch.float32)
+
+                            # Resize cropped mask
+                            if cropped_mask.shape != (crop_h, crop_w):
+                                resized_mask = torch.nn.functional.interpolate(
+                                    cropped_mask.unsqueeze(0).unsqueeze(0),
+                                    size=(crop_h, crop_w),
+                                    mode="nearest"
+                                ).squeeze()
+                            else:
+                                resized_mask = cropped_mask
+
+                            # Place mask
+                            end_y = min(y + crop_h, h)
+                            end_x = min(x + crop_w, w)
+                            actual_h = end_y - y
+                            actual_w = end_x - x
+
+                            full_mask[y:end_y, x:end_x] = resized_mask[:actual_h, :actual_w]
+
+                            # Generate depth for segment
+                            seg_depth = self.depth_estimator.estimate_depth(img, full_mask)
+                            depth_map = torch.maximum(depth_map, seg_depth)
+
+                # Normalize
+                if normalize:
+                    depth_min = depth_map.min()
+                    depth_max = depth_map.max()
+                    if depth_max > depth_min:
+                        depth_map = (depth_map - depth_min) / (depth_max - depth_min)
+
+                # Convert to image [H, W, C]
+                depth_image = depth_map.unsqueeze(-1).repeat(1, 1, 3)
+                all_depth_images.append(depth_image)
+
+                # Also as mask [H, W]
+                all_depth_masks.append(depth_map)
+
+            # Stack results
+            if batch_size == 1:
+                final_depth_image = all_depth_images[0].unsqueeze(0)  # [1, H, W, C]
+                final_depth_mask = all_depth_masks[0].unsqueeze(0)    # [1, H, W]
+            else:
+                final_depth_image = torch.stack(all_depth_images, dim=0)  # [B, H, W, C]
+                final_depth_mask = torch.stack(all_depth_masks, dim=0)    # [B, H, W]
+
+            return (final_depth_image, final_depth_mask)
+
+        except Exception as e:
+            error_msg = f"Depth Generation Error:\n{str(e)}"
+            print(f"[SAM3] ERROR: {error_msg}")
+            raise RuntimeError(error_msg)
+
+
 
 NODE_CLASS_MAPPINGS = {
     "TBGLoadSAM3Model": TBGLoadSAM3Model,              # your simple loader
     "TBGSAM3ModelLoaderAdvanced": TBGSAM3ModelLoaderAndDownloader,  # new advanced loader
     "TBGSam3Segmentation": TBGSam3Segmentation,
     "TBGSam3SegmentationBatch": TBGSam3SegmentationBatch,
-    "TBGSAM3PromptCollector": TBGSAM3PromptCollector
+    "TBGSAM3PromptCollector": TBGSAM3PromptCollector,
+    "SAM3DepthMap": SAM3DepthMap,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1321,4 +1453,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TBGSam3Segmentation": "TBG SAM3 Segmentation",
     "TBGSAM3PromptCollector": "TBG SAM3 Selector",
     "TBGSam3SegmentationBatch":"TBG SAM3 Batch Selector",
+    "SAM3DepthMap": "SAM3 Depth Map",
 }
