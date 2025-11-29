@@ -16,17 +16,14 @@ hydra-core>=1.3.0
 omegaconf>=2.3.0
 einops>=0.6.0
 pycocotools>=2.0.6
-iopath>=0.1.9
 shapely>=1.8.0
 ftfy>=6.1.1
 regex
 iopath>=0.1.10
+typing_extensions
+numpy>=1.26,<1.28
+tqdm>=4.65.0
 
 # Match transformers requirement: >=0.34.0,<1.0 (adjusted to range that exists for your Python)
 # keep transformers itself in a safe range
 transformers>=4.40.0,<5.0.0
-
-# Standard dependencies
-typing_extensions
-numpy>=1.26  # Will pick the newest that exists for your Python
-tqdm>=4.65.0
