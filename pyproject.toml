@@ -1,7 +1,7 @@
 [project]
-name = "tbg-sam3"
+name = "ComfyUI-TBG-SAM3"
 description = "A ComfyUI custom-node extension that integrates Meta's Segment Anything Model 3 (SAM-3) for advanced image segmentation. It supports unified point and box selection, text-prompt segmentation, point-guided masks, and mask-driven refinement. Features include an Instant Instance Selection toggle, compatibility with tile-based upscalers such as TBG-ETUR, and full support for Impact Pack SEGS formats.\nThe extension provides both combined and separated mask outputs, offers production-ready ComfyUI nodes, includes optional depth-map generation, and is fully compatible with Python 3.13+ on both CUDA and CPU environments."
-version = "1.0.6"
+version = "1.0.7"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
@@ -20,7 +20,7 @@ license = {file = "LICENSE"}
 #     "Environment :: GPU :: Apple Metal",    # Apple Metal support
 # ]
 
-dependencies = ["# SAM3 Node - COMPLETE Dependencies for Python 3.13", "# Only packages NOT in ComfyUI standard installation", "# Hugging Face for model downloading", "huggingface_hub>=0.23.0", "# OpenCV for image/video processing", "opencv-python>=4.8.0", "# Timm for vision transformers", "timm>=0.9.0", "# SAM3 REQUIRED dependencies (not auto-installed with --no-deps)", "decord>=0.6.0", "av>=9.0.0", "hydra-core>=1.3.0", "omegaconf>=2.3.0", "einops>=0.6.0", "tqdm>=4.65.0", "pycocotools>=2.0.6", "iopath>=0.1.9", "shapely>=1.8.0", "# Additional dependencies that SAM3 may need", "# (scipy, scikit-image, matplotlib, pandas are in ComfyUI)", "# SAM3 installed via install.py from GitHub", "# git+https://github.com/facebookresearch/sam3.git"]
+dependencies = ["huggingface_hub>=0.34.0,<1.0","opencv-python>=4.8.0","timm>=1.0.17","decord>=0.6.0","av>=9.0.0","hydra-core>=1.3.0","omegaconf>=2.3.0","einops>=0.6.0","pycocotools>=2.0.6","shapely>=1.8.0","ftfy>=6.1.1","regex","iopath>=0.1.10","typing_extensions","numpy>=1.26,<1.28","tqdm>=4.65.0","transformers>=4.40.0,<5.0.0","# SAM3 installed via install.py from GitHub","# git+https://github.com/facebookresearch/sam3.git"]
 
 [project.urls]
 Repository = "https://github.com/Ltamann/ComfyUI-TBG-SAM3"
