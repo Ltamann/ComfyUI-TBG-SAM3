@@ -1,4 +1,5 @@
 **Updated Release: ComfyUI-TBG-SAM3 — Now we can plug a cleaned-up SAM3 segment straight into TBG Enhanced Refiner or any SEGS-ready input, like the Impact Pack effortlessly! So whats new.**
+[Visit TBG enhanced tiled upscaler and refiner pro](https://github.com/Ltamann/ComfyUI-TBG-ETUR)
 
 # ComfyUI-TBG-SAM3
 
