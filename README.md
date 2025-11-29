@@ -1,11 +1,38 @@
-**This is was a the first version for testing .... get this version for now https://github.com/PozzettiAndrea/ComfyUI-SAM3**
+**Updated Release: ComfyUI-TBG-SAM3 — Now we can plug a cleaned-up SAM3 segment straight into TBG Enhanced Refiner or any SEGS-ready input, like the Impact Pack effortlessly! So whats new.**
 
 # ComfyUI-TBG-SAM3
 
-A ComfyUI custom node extension integrating Meta's **Segment Anything Model 3 (SAM 3)** for advanced image and video segmentation capabilities. This extension provides production-ready nodes compatible with ComfyUI’s Impact Pack SEGS format, enabling text-prompt, point-based, and mask-driven segmentation as well as depth map generation per segment or for full images.
-A ComfyUI custom-node extension that integrates Meta’s **Segment Anything Model 3 (SAM-3)** for advanced image segmentation. It supports unified point and box selection, text-prompt segmentation, point-guided masks, and mask-driven refinement. Features include an **Instant Instance Selection toggle**, **compatibility with tile-based upscalers such as TBG-ETUR**, and full support for **Impact Pack SEGS formats**.
+A ComfyUI custom-node extension that integrates Meta’s **Segment Anything Model 3 (SAM-3)** for advanced image segmentation. It supports unified point and box selection, text-prompt segmentation, point-guided masks, and mask-driven refinement. Features include an **Instance Selection toggle**, **compatibility with tile-based upscalers such as TBG-ETUR**, and full support for **Impact Pack SEGS formats**.
 
-The extension provides both combined and separated mask outputs, offers production-ready ComfyUI nodes, includes optional depth-map generation, and is fully compatible with Python 3.13+ on both CUDA and CPU environments.
+The ComfyUI-TBG-SAM3 update focuses on making SAM3 segmentation easier to use, more compatible with common workflows, and cleaner in its final output. The node set still uses the same three core nodes — TBG SAM3 ModelLoader & Downloader, TBG SAM3 Segmentation, and TBG SAM3 Selector — but each one has been improved.
+
+
+<img width="3012" height="1336" alt="Image" src="https://github.com/user-attachments/assets/d4813329-f378-4e70-b3b1-a0c8967b778c" />
+
+<img width="3125" height="1527" alt="Image" src="https://github.com/user-attachments/assets/ac4c35a4-63f8-4395-ba53-b7b1145230d5" />
+
+**Key Improvements**
+
+- **Unified Point-and-Box Selector**
+The TBG SAM3 Selector now combines point and box selection into a single, streamlined tool. It supports both positive and negative prompts and keeps everything connected cleanly, making interactive segmentation much easier.
+
+- **Enhanced Segmentation Logic + Instance Toggle**
+The TBG SAM3 Segmentation node now uses the official SAM3 segmentation workflow and includes a new switch that lets you turn off instance generation when you don’t need it.
+
+- **Tile-Based TBG-ETUR Compatibility**
+Special output formats were added for full compatibility with TBG-ETUR’s tile-based upscaling workflow. This ensures stable, per-tile segmentation masks for high-resolution refinement.
+
+- **Impact Pack SEGS Support**
+The node now works directly with Impact Pack SEGS, making SAM3 usable in automated and multi-stage SEGS pipelines.
+
+- **Unified Model folder with other SAM3 nodes**
+model at models/sam3/sam3.pt
+
+- **New Cleanup Tools**
+Min-Size Filter: Removes tiny or unwanted segments below a defined size.
+Fill Holes: Automatically fills empty gaps inside segmented regions.
+
+This update makes the TBG-SAM3 node set fully usable inside ComfyUI, adding better compatibility, improved segmentation handling, and practical cleanup features for all of us.
 
 ## Features
 
@@ -39,6 +66,13 @@ The extension provides both combined and separated mask outputs, offers producti
    cd ComfyUI-TBG-SAM3
    pip install -r requirements.txt
 
+3. If the nodes do not appear after installation, then SAM3 is likely not installed correctly in your environment. Check the installation logs and verify that the auto installation steps were completed properly inside your Python environment. Or install manually 
+
+   git clone https://github.com/facebookresearch/sam3.git
+   
+   cd sam3
+   
+   pip install -e .
 
 ## Hugging Face Model Access Tutorial
 
