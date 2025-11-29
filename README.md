@@ -51,6 +51,10 @@ This update makes the TBG-SAM3 node set fully usable inside ComfyUI, adding bett
 - **TBG SAM3 Batch Selector**  
   Node for batch image processing without Impactpack
 
+- **`TBG SAM3 Depth Map**  
+  Node for depth estimation; simple implementation, and there are more advanced depth map methods available.
+
+
 
 ## Features
 
