@@ -34,6 +34,24 @@ Fill Holes: Automatically fills empty gaps inside segmented regions.
 
 This update makes the TBG-SAM3 node set fully usable inside ComfyUI, adding better compatibility, improved segmentation handling, and practical cleanup features for all of us.
 
+**Nodes**
+
+- **TBG SAM3 Model Loader**  
+  Loads the SAM3 model
+
+- **TBGSAM3ModelLoaderAdvanced**  
+  Loads and downloads the SAM3 model
+
+- **TBG SAM3 Segmentation**  
+  Point and Box Segmentation for single image input
+
+- **TBG SAM3 Selector**  
+  Single Images selector with Impactpack optimized output (Impactpack does not handle batch segmentation)
+
+- **TBG SAM3 Batch Selector**  
+  Node for batch image processing without Impactpack
+
+
 ## Features
 
 - **SAM3 Model Loader and Downloader**: Simple loader for local, cached models plus an advanced loader that can auto-download sam3.pt from Hugging Face into models/sam3 and reuse it across sessions.
