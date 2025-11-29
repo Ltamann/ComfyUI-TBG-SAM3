@@ -1310,7 +1310,7 @@ class TBGSAM3PromptCollector:
             "result": (pipeline,),
         }
 
-class SAM3DepthMap:
+class TBGSAM3DepthMap:
     """Generate depth maps for images or segments"""
 
     def __init__(self):
@@ -1444,7 +1444,7 @@ NODE_CLASS_MAPPINGS = {
     "TBGSam3Segmentation": TBGSam3Segmentation,
     "TBGSam3SegmentationBatch": TBGSam3SegmentationBatch,
     "TBGSAM3PromptCollector": TBGSAM3PromptCollector,
-    "SAM3DepthMap": SAM3DepthMap,
+    "TBGSAM3DepthMap": TBGSAM3DepthMap,
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -1453,5 +1453,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TBGSam3Segmentation": "TBG SAM3 Segmentation",
     "TBGSAM3PromptCollector": "TBG SAM3 Selector",
     "TBGSam3SegmentationBatch":"TBG SAM3 Batch Selector",
-    "SAM3DepthMap": "SAM3 Depth Map",
+    "TBGSAM3DepthMap": "TBG SAM3 Depth Map",
 }
