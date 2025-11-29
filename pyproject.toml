@@ -1,7 +1,7 @@
 [project]
 name = "tbg-sam3"
 description = "A ComfyUI custom-node extension that integrates Meta's Segment Anything Model 3 (SAM-3) for advanced image segmentation. It supports unified point and box selection, text-prompt segmentation, point-guided masks, and mask-driven refinement. Features include an Instant Instance Selection toggle, compatibility with tile-based upscalers such as TBG-ETUR, and full support for Impact Pack SEGS formats.\nThe extension provides both combined and separated mask outputs, offers production-ready ComfyUI nodes, includes optional depth-map generation, and is fully compatible with Python 3.13+ on both CUDA and CPU environments."
-version = "1.0.3"
+version = "1.0.4"
 license = {file = "LICENSE"} 
 # classifiers = [
 #     # For OS-independent nodes (works on all operating systems)
