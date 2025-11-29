@@ -185,46 +185,6 @@ class TBGLoadSAM3Model:
 
 
 
-class SAM3PromptPipeline:
-    """
-    Combines multiple SAM3 prompts into a unified pipeline for cleaner workflows
-    """
-
-    @classmethod
-    def INPUT_TYPES(cls):
-        return {
-            "optional": {
-                "positive_boxes": ("SAM3_BOXES_PROMPT", {
-                    "tooltip": "Optional positive box prompts to include in pipeline"
-                }),
-                "negative_boxes": ("SAM3_BOXES_PROMPT", {
-                    "tooltip": "Optional negative box prompts to include in pipeline"
-                }),
-                "positive_points": ("SAM3_POINTS_PROMPT", {
-                    "tooltip": "Optional positive point prompts to include in pipeline"
-                }),
-                "negative_points": ("SAM3_POINTS_PROMPT", {
-                    "tooltip": "Optional negative point prompts to include in pipeline"
-                }),
-            }
-        }
-
-    RETURN_TYPES = ("SAM3_PROMPT_PIPELINE",)
-    RETURN_NAMES = ("sam3_selectors_pipe",)
-    FUNCTION = "create_pipeline"
-    CATEGORY = "TBG/SAM3"
-
-    def create_pipeline(self, positive_boxes=None, negative_boxes=None,
-                        positive_points=None, negative_points=None):
-
-        pipeline = {
-            "positive_boxes": positive_boxes,
-            "negative_boxes": negative_boxes,
-            "positive_points": positive_points,
-            "negative_points": negative_points,
-        }
-        return (pipeline,)
-
 
 class TBGSam3Segmentation:
     @classmethod
@@ -788,6 +748,455 @@ class TBGSam3Segmentation:
         return (shape_info, seg_list)
 
 
+class TBGSam3SegmentationBatch:
+    @classmethod
+    def INPUT_TYPES(cls):
+        return {
+            "required": {
+                "sam3_model": ("SAM3_MODEL", {
+                    "tooltip": "SAM3 model loaded from LoadSAM3Model node"
+                }),
+                "image": ("IMAGE", {
+                    "tooltip": "Input image batch to perform segmentation on (B,H,W,C)"
+                }),
+                "confidence_threshold": ("FLOAT", {
+                    "default": 0.4,
+                    "min": 0.0,
+                    "max": 1.0,
+                    "step": 0.05,
+                    "display": "slider",
+                    "tooltip": "Minimum confidence score to keep detections"
+                }),
+                "pipeline_mode": (["all", "boxes_only", "points_only", "positive_only", "negative_only", "disabled"], {
+                    "default": "all",
+                    "tooltip": "Which prompts from pipeline to use"
+                }),
+                "detect_all": ("BOOLEAN", {
+                    "default": True,
+                    "label_on": "Detect All",
+                    "label_off": "Limit Detections",
+                    "tooltip": "When enabled, detects all objects. When disabled, uses max_detections"
+                }),
+                "max_detections": ("INT", {
+                    "default": 50,
+                    "min": 1,
+                    "max": 100,
+                    "step": 1,
+                    "tooltip": "Maximum detections when detect_all is disabled"
+                }),
+                "instances": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "Filter Instances",
+                    "label_off": "All Instances",
+                    "tooltip": "When ON: keep only detections overlapping positive prompts"
+                }),
+                "crop_factor": ("FLOAT", {
+                    "default": 1.5,
+                    "min": 1.0,
+                    "max": 4.0,
+                    "step": 0.1,
+                    "tooltip": "Crop factor for SEGS. 1.0 = tight bbox"
+                }),
+                "min_size": ("INT", {
+                    "default": 100,
+                    "min": 1,
+                    "max": 500,
+                    "step": 1,
+                    "display": "slider",
+                    "tooltip": "Minimum segment size (square side in pixels)"
+                }),
+                "fill_holes": ("BOOLEAN", {
+                    "default": False,
+                    "label_on": "Fill Holes",
+                    "label_off": "Keep Holes",
+                    "tooltip": "Fill holes inside masks"
+                }),
+            },
+            "optional": {
+                "text_prompt": ("STRING", {
+                    "default": "",
+                    "multiline": True,
+                    "placeholder": "e.g., 'cat', 'person in red', 'car'",
+                    "tooltip": "Text to guide segmentation"
+                }),
+                "sam3_selectors_pipe": ("SAM3_PROMPT_PIPELINE", {
+                    "tooltip": "Unified pipeline containing boxes/points"
+                }),
+                "mask_prompt": ("MASK", {
+                    "tooltip": "Optional batch mask (B,H,W or 1,H,W)"
+                }),
+            }
+        }
+
+    # Impact Pack compatible outputs
+    RETURN_TYPES = ("SEGS", "IMAGE", "MASK", "MASK")
+    RETURN_NAMES = ("segs", "visualization", "combined_mask", "batch_masks")
+    FUNCTION = "segment"
+    CATEGORY = "TBG/SAM3"
+
+    def segment(
+            self,
+            sam3_model,
+            image,
+            confidence_threshold=0.4,
+            detect_all=True,
+            pipeline_mode="all",
+            instances=False,
+            crop_factor=1.5,
+            min_size=100,
+            fill_holes=False,
+            text_prompt="",
+            sam3_selectors_pipe=None,
+            mask_prompt=None,
+            max_detections=50,
+    ):
+        actual_max_detections = -1 if detect_all else max_detections
+        batch_size, height, width, channels = image.shape
+
+        def _valid_block(block, key):
+            return isinstance(block, dict) and key in block and bool(block[key])
+
+        # --- Extract prompts from pipeline ---
+        positive_boxes = None
+        negative_boxes = None
+        positive_points = None
+        negative_points = None
+
+        if sam3_selectors_pipe is not None and pipeline_mode != "disabled":
+            if not isinstance(sam3_selectors_pipe, dict):
+                raise ValueError(f"sam3_selectors_pipe must be dict, got {type(sam3_selectors_pipe)}")
+
+            pipeline_positive_boxes = sam3_selectors_pipe.get("positive_boxes", None)
+            pipeline_negative_boxes = sam3_selectors_pipe.get("negative_boxes", None)
+            pipeline_positive_points = sam3_selectors_pipe.get("positive_points", None)
+            pipeline_negative_points = sam3_selectors_pipe.get("negative_points", None)
+
+            if pipeline_mode == "all":
+                positive_boxes = pipeline_positive_boxes
+                negative_boxes = pipeline_negative_boxes
+                positive_points = pipeline_positive_points
+                negative_points = pipeline_negative_points
+            elif pipeline_mode == "boxes_only":
+                positive_boxes = pipeline_positive_boxes
+                negative_boxes = pipeline_negative_boxes
+            elif pipeline_mode == "points_only":
+                positive_points = pipeline_positive_points
+                negative_points = pipeline_negative_points
+            elif pipeline_mode == "positive_only":
+                positive_boxes = pipeline_positive_boxes
+                positive_points = pipeline_positive_points
+            elif pipeline_mode == "negative_only":
+                negative_boxes = pipeline_negative_boxes
+                negative_points = pipeline_negative_points
+
+        print(f"[SAM3] Batch size: {batch_size}, pipeline_mode: {pipeline_mode}, instances: {instances}")
+
+        # --- Accumulators for batch processing ---
+        all_detection_masks = []  # All individual detection masks across all frames
+        all_combined_masks = []  # One combined mask per frame
+        all_vis_tensors = []  # One visualization per frame
+        all_segs = []  # SEGS from all frames
+
+        ensure_model_on_device(sam3_model)
+        processor = sam3_model["processor"]
+        processor.set_confidence_threshold(confidence_threshold)
+
+        # --- Process each frame ---
+        for b in range(batch_size):
+            print(f"[SAM3] Frame {b + 1}/{batch_size}")
+
+            img_tensor = image[b:b + 1]
+            pil_image = comfy_image_to_pil(img_tensor)
+            if isinstance(pil_image, list):
+                pil_image_single = pil_image[0]
+            else:
+                pil_image_single = pil_image
+
+            state = processor.set_image(pil_image_single)
+
+            # Apply text prompt
+            if text_prompt and text_prompt.strip():
+                state = processor.set_text_prompt(text_prompt.strip(), state)
+
+            # Apply box prompts
+            all_boxes = []
+            all_box_labels = []
+            if _valid_block(positive_boxes, "boxes"):
+                all_boxes.extend(positive_boxes["boxes"])
+                all_box_labels.extend(positive_boxes.get("labels", [1] * len(positive_boxes["boxes"])))
+            if _valid_block(negative_boxes, "boxes"):
+                all_boxes.extend(negative_boxes["boxes"])
+                all_box_labels.extend(negative_boxes.get("labels", [0] * len(negative_boxes["boxes"])))
+            if all_boxes:
+                state = processor.add_multiple_box_prompts(all_boxes, all_box_labels, state)
+
+            # Apply point prompts
+            all_points = []
+            all_point_labels = []
+            if _valid_block(positive_points, "points"):
+                all_points.extend(positive_points["points"])
+                all_point_labels.extend(positive_points.get("labels", [1] * len(positive_points["points"])))
+            if _valid_block(negative_points, "points"):
+                all_points.extend(negative_points["points"])
+                all_point_labels.extend(negative_points.get("labels", [0] * len(negative_points["points"])))
+            if all_points:
+                state = processor.add_point_prompt(all_points, all_point_labels, state)
+
+            # Apply mask prompt
+            current_mask_prompt = None
+            if mask_prompt is not None:
+                if isinstance(mask_prompt, torch.Tensor):
+                    if mask_prompt.dim() == 3 and mask_prompt.shape[0] == batch_size:
+                        current_mask_prompt = mask_prompt[b]
+                    else:
+                        current_mask_prompt = mask_prompt
+                else:
+                    current_mask_prompt = mask_prompt
+
+                if current_mask_prompt is not None:
+                    if not isinstance(current_mask_prompt, torch.Tensor):
+                        current_mask_prompt = torch.from_numpy(current_mask_prompt)
+                    current_mask_prompt = current_mask_prompt.to(sam3_model["device"])
+                    state = processor.add_mask_prompt(current_mask_prompt, state)
+
+            # Run SAM3
+            masks = state.get("masks", None)
+            boxes = state.get("boxes", None)
+            scores = state.get("scores", None)
+
+            # Filter by min_size
+            if masks is not None and isinstance(masks, torch.Tensor) and masks.numel() > 0 and min_size > 1:
+                min_area = float(min_size * min_size)
+                if masks.dim() == 4 and masks.shape[1] == 1:
+                    masks_flat = masks[:, 0, :, :]
+                elif masks.dim() == 3:
+                    masks_flat = masks
+                elif masks.dim() == 4:
+                    masks_flat = masks.mean(dim=1)
+                else:
+                    raise ValueError(f"[SAM3] Unexpected masks shape: {masks.shape}")
+
+                binary = (masks_flat > 0.5).float()
+                areas = binary.view(binary.shape[0], -1).sum(dim=1)
+                keep_indices = (areas >= min_area).nonzero(as_tuple=False).view(-1)
+
+                if keep_indices.numel() > 0:
+                    masks = masks[keep_indices]
+                    boxes = boxes[keep_indices] if boxes is not None else None
+                    scores = scores[keep_indices] if scores is not None else None
+                else:
+                    masks = None
+
+            # Handle empty detections
+            if masks is None or (isinstance(masks, torch.Tensor) and masks.numel() == 0):
+                print(f"[SAM3] No detections for frame {b}")
+                empty_combined = torch.zeros(1, height, width, device="cpu")
+                all_combined_masks.append(empty_combined)
+                all_vis_tensors.append(pil_to_comfy_image(pil_image_single))
+                continue
+
+            # Instance filtering
+            if instances and boxes is not None and isinstance(boxes, torch.Tensor):
+                boxes_cpu = boxes.detach().cpu()
+                positive_prompt_boxes = []
+                if _valid_block(positive_boxes, "boxes"):
+                    for cx, cy, w_norm, h_norm in positive_boxes["boxes"]:
+                        x1 = (cx - w_norm / 2.0) * width
+                        y1 = (cy - h_norm / 2.0) * height
+                        x2 = (cx + w_norm / 2.0) * width
+                        y2 = (cy + h_norm / 2.0) * height
+                        positive_prompt_boxes.append([x1, y1, x2, y2])
+
+                positive_prompt_points = []
+                if _valid_block(positive_points, "points"):
+                    for px_norm, py_norm in positive_points["points"]:
+                        positive_prompt_points.append([px_norm * width, py_norm * height])
+
+                keep_indices = []
+                iou_threshold = 0.1
+
+                for i_det, det_box in enumerate(boxes_cpu):
+                    ax1, ay1, ax2, ay2 = det_box.tolist()
+                    max_iou = 0.0
+                    for bx1, by1, bx2, by2 in positive_prompt_boxes:
+                        ix1, iy1 = max(ax1, bx1), max(ay1, by1)
+                        ix2, iy2 = min(ax2, bx2), min(ay2, by2)
+                        inter = max(0.0, ix2 - ix1) * max(0.0, iy2 - iy1)
+                        if inter > 0:
+                            area_a = max(0.0, ax2 - ax1) * max(0.0, ay2 - ay1)
+                            area_b = max(0.0, bx2 - bx1) * max(0.0, by2 - by1)
+                            union = area_a + area_b - inter
+                            if union > 0:
+                                max_iou = max(max_iou, inter / union)
+
+                    point_inside = any(ax1 <= px <= ax2 and ay1 <= py <= ay2
+                                       for px, py in positive_prompt_points)
+
+                    if (positive_prompt_boxes and max_iou >= iou_threshold) or \
+                            (positive_prompt_points and point_inside):
+                        keep_indices.append(i_det)
+
+                if keep_indices:
+                    keep_tensor = torch.tensor(keep_indices, dtype=torch.long, device=boxes.device)
+                    masks = masks[keep_tensor]
+                    boxes = boxes[keep_tensor]
+                    scores = scores[keep_tensor] if scores is not None else None
+                else:
+                    masks = None
+
+            # Limit detections
+            if isinstance(masks, torch.Tensor) and masks is not None and \
+                    actual_max_detections > 0 and len(masks) > actual_max_detections:
+                if scores is not None:
+                    top_indices = torch.argsort(scores, descending=True)[:actual_max_detections]
+                    masks = masks[top_indices]
+                    boxes = boxes[top_indices]
+                    scores = scores[top_indices]
+
+            # Fill holes
+            if fill_holes and isinstance(masks, torch.Tensor) and masks.numel() > 0:
+                import cv2
+                device = masks.device
+                if masks.dim() == 4 and masks.shape[1] == 1:
+                    masks_flat = masks[:, 0, :, :].detach().cpu()
+                elif masks.dim() == 3:
+                    masks_flat = masks.detach().cpu()
+                else:
+                    masks_flat = masks.mean(dim=1).detach().cpu()
+
+                filled_list = []
+                for idx_m in range(masks_flat.shape[0]):
+                    m = masks_flat[idx_m].numpy()
+                    fg = (m > 0.5).astype(np.uint8)
+                    if fg.sum() == 0:
+                        filled_list.append(fg.astype(np.float32))
+                        continue
+
+                    ys, xs = np.where(fg == 1)
+                    y1, y2, x1, x2 = ys.min(), ys.max(), xs.min(), xs.max()
+                    crop_fg = fg[y1:y2 + 1, x1:x2 + 1]
+                    ch, cw = crop_fg.shape
+
+                    inv = 1 - crop_fg
+                    inv_ff = inv.copy()
+                    mask_ff = np.zeros((ch + 2, cw + 2), np.uint8)
+                    cv2.floodFill(inv_ff, mask_ff, (0, 0), 2)
+                    cv2.floodFill(inv_ff, mask_ff, (cw - 1, 0), 2)
+                    cv2.floodFill(inv_ff, mask_ff, (0, ch - 1), 2)
+                    cv2.floodFill(inv_ff, mask_ff, (cw - 1, ch - 1), 2)
+
+                    outer_bg = (inv_ff == 2).astype(np.uint8)
+                    holes = np.clip(inv - outer_bg, 0, 1)
+                    filled_crop = np.clip(crop_fg + holes, 0, 1).astype(np.uint8)
+                    filled_full = fg.copy()
+                    filled_full[y1:y2 + 1, x1:x2 + 1] = filled_crop
+                    filled_list.append(filled_full.astype(np.float32))
+
+                filled_stack = torch.from_numpy(np.stack(filled_list, axis=0)).to(device)
+                masks = filled_stack.unsqueeze(1) if masks.dim() == 4 and masks.shape[1] == 1 else filled_stack
+
+            # Build per-frame outputs
+            if masks is not None and isinstance(masks, torch.Tensor) and masks.numel() > 0:
+                # Individual detection masks for this frame
+                frame_detection_masks = masks_to_comfy_mask(masks)  # [N, H, W]
+                all_detection_masks.append(frame_detection_masks)
+
+                # Combined mask (union of all detections)
+                if masks.dim() == 4 and masks.shape[1] == 1:
+                    masks_flat = masks[:, 0, :, :]
+                elif masks.dim() == 3:
+                    masks_flat = masks
+                else:
+                    masks_flat = masks.mean(dim=1)
+
+                combined_tensor = (masks_flat > 0.5).any(dim=0, keepdim=True).float()  # [1, H, W]
+                all_combined_masks.append(combined_tensor)
+
+                # Build SEGS for this frame
+                segs = self._build_segs(
+                    masks=masks,
+                    boxes=boxes,
+                    scores=scores,
+                    original_image=img_tensor,
+                    text_prompt=text_prompt,
+                    width=width,
+                    height=height,
+                    crop_factor=crop_factor
+                )
+                all_segs.append(segs)
+
+                # Visualization
+                vis_image = visualize_masks_on_image(pil_image_single, masks, boxes, scores, alpha=0.5)
+                all_vis_tensors.append(pil_to_comfy_image(vis_image))
+            else:
+                # Empty frame
+                empty_combined = torch.zeros(1, height, width, device="cpu")
+                all_combined_masks.append(empty_combined)
+                all_vis_tensors.append(pil_to_comfy_image(pil_image_single))
+
+        # --- Merge outputs ---
+        # batch_masks: all detection masks from all frames [N_total, H, W]
+        if all_detection_masks:
+            batch_masks = torch.cat(all_detection_masks, dim=0)
+        else:
+            batch_masks = torch.zeros(0, height, width, device="cpu")
+
+        # combined_mask: one per frame [B, H, W]
+        combined_mask = torch.cat(all_combined_masks, dim=0)
+
+        # visualization: one per frame [B, H, W, C]
+        visualization = torch.cat(all_vis_tensors, dim=0)
+
+        # SEGS: merge all frames into single SEGS
+        if all_segs:
+            shape_info = all_segs[0][0]
+            merged_seg_list = []
+            for shape_f, seg_list_f in all_segs:
+                merged_seg_list.extend(seg_list_f)
+            final_segs = (shape_info, merged_seg_list)
+        else:
+            final_segs = ((height, width), [])
+
+        print(f"[SAM3] Complete: {len(final_segs[1])} SEGS, {batch_masks.shape[0]} detection masks, "
+              f"{combined_mask.shape[0]} frames")
+
+        offload_model_if_needed(sam3_model)
+
+        return (final_segs, visualization, combined_mask, batch_masks)
+
+    def _build_segs(self, masks, boxes, scores, original_image, text_prompt, width, height, crop_factor):
+        from .masktosegs import make_2d_mask, mask_to_segs
+
+        shape_info = (height, width)
+        seg_list = []
+
+        if masks is None or len(masks) == 0:
+            return (shape_info, seg_list)
+
+        masks_cpu = masks.detach().cpu() if isinstance(masks, torch.Tensor) else masks
+
+        for i in range(len(masks_cpu)):
+            mask_i = masks_cpu[i]
+            mask_2d = make_2d_mask(mask_i)
+            label = f"{text_prompt}_{i}" if text_prompt and text_prompt.strip() else f"detection_{i}"
+
+            shape_inst, segs_inst = mask_to_segs(
+                mask_2d,
+                combined=False,
+                crop_factor=crop_factor,
+                bbox_fill=False,
+                drop_size=1,
+                label=label,
+                crop_min_size=None,
+                detailer_hook=None,
+                is_contour=True,
+            )
+            if segs_inst:
+                seg_list.extend(segs_inst)
+
+        return (shape_info, seg_list)
+
+
 class TBGSAM3PromptCollector:
     """
     Unified SAM3 Prompt Collector - collects points and boxes in single node
@@ -902,7 +1311,8 @@ NODE_CLASS_MAPPINGS = {
     "TBGLoadSAM3Model": TBGLoadSAM3Model,              # your simple loader
     "TBGSAM3ModelLoaderAdvanced": TBGSAM3ModelLoaderAndDownloader,  # new advanced loader
     "TBGSam3Segmentation": TBGSam3Segmentation,
-    "TBGSAM3PromptCollector": TBGSAM3PromptCollector,
+    "TBGSam3SegmentationBatch": TBGSam3SegmentationBatch,
+    "TBGSAM3PromptCollector": TBGSAM3PromptCollector
 }
 
 NODE_DISPLAY_NAME_MAPPINGS = {
@@ -910,4 +1320,5 @@ NODE_DISPLAY_NAME_MAPPINGS = {
     "TBGSAM3ModelLoaderAdvanced": "TBG SAM3 Model Loader and Downloader",
     "TBGSam3Segmentation": "TBG SAM3 Segmentation",
     "TBGSAM3PromptCollector": "TBG SAM3 Selector",
+    "TBGSam3SegmentationBatch":"TBG SAM3 Batch Selector",
 }
