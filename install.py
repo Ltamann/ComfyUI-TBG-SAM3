@@ -2,19 +2,6 @@ import subprocess
 import sys
 import os
 
-DEPENDENCIES = [
-    "timm>=1.0.17",
-    "numpy>=1.26",  # Will pick the newest that exists for your Python
-    "tqdm",
-    "ftfy>=6.1.1",
-    "regex",
-    "iopath>=0.1.10",
-    "typing_extensions",
-    # Match transformers requirement: >=0.34.0,<1.0 (adjusted to range that exists for your Python)
-    "huggingface_hub>=0.34.0,<1.0",
-    # Optional but recommended: keep transformers itself in a safe range
-    "transformers>=4.40.0,<5.0.0",
-]
 
 
 def run(cmd, desc):
@@ -31,12 +18,8 @@ def main():
     print("[SAM3 Install] ComfyUI SAM3 Node - Installation (Modern Robust Style)")
     print("=" * 70)
 
-    # Step 1: Install dependencies
-    print("[SAM3 Install] Step 1: Installing dependencies...")
-    for dep in DEPENDENCIES:
-        run([sys.executable, "-m", "pip", "install", "--upgrade", dep], f"Install {dep}")
 
-    # Step 2: Clone SAM3 if not present
+    # Step 1: Clone SAM3 if not present
     if not os.path.exists("sam3"):
         run(["git", "clone", "https://github.com/facebookresearch/sam3.git"], "Clone SAM3 repo")
     else:
@@ -49,7 +32,6 @@ def main():
     )
 
     # Use plain ASCII to avoid UnicodeEncodeError on Windows consoles
-    print("\n[SAM3 Install] All dependencies and SAM3 installed successfully!")
     print("[SAM3 Install] If you see errors, check PyTorch/numpy compatibility and try again.\n")
 
 
