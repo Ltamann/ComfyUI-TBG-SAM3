@@ -77,7 +77,7 @@ class SAM3ImageSegmenter:
                 print("[SAM3] Auto-downloading from HuggingFace...")
                 self.model = build_sam3_image_model(device=self.device)
                 self.processor = Sam3Processor(self.model)
-                print("[SAM3] ✓ Model loaded successfully (API mode)")
+                print("[SAM3] âœ“ Model loaded successfully (API mode)")
                 return
 
             # LOCAL MODEL LOADING MODE
@@ -99,7 +99,7 @@ class SAM3ImageSegmenter:
 
             self.model.load_state_dict(state_dict, strict=False)
             self.processor = Sam3Processor(self.model)
-            print("[SAM3] ✓ Model loaded successfully (local mode)")
+            print("[SAM3] âœ“ Model loaded successfully (local mode)")
 
         except ImportError as e:
             error_msg = f"SAM3 not installed: {e}\n"
@@ -152,7 +152,7 @@ class SAM3ImageSegmenter:
         with torch.no_grad():
             outputs = self.model(**inputs)
 
-        # Post‑process; SAM3 examples typically use target_sizes / original_sizes from inputs
+        # Postâ€‘process; SAM3 examples typically use target_sizes / original_sizes from inputs
         results = self.processor.post_process_instance_segmentation(
             outputs=outputs,
             threshold=0.1,
