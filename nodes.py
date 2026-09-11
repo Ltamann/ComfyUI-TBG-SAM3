@@ -4,7 +4,8 @@ All class names and functions prefixed with TBG for uniqueness.
 """
 
 import torch
-from PIL import Image
+import torch.nn.functional as F
+from PIL import Image, ImageFilter
 import numpy as np
 
 import json
@@ -31,6 +32,60 @@ from typing import Tuple, Optional
 from .masktosegs import mask_to_segs, SEG
 
 _MODEL_CACHE = {}
+
+
+def _combined_segments_rgba(image, combined_mask, edge_feather=1.25):
+    """Return a centered, square, TRELLIS-ready RGBA cutout."""
+    _, height, width, channels = image.shape
+
+    source = image[0, :, :, :3]
+    if channels == 1:
+        source = source.expand(-1, -1, 3)
+
+    alpha = combined_mask[0].to(dtype=image.dtype, device=image.device)
+    alpha_cpu = alpha.detach().cpu().numpy()
+    ys, xs = np.where(alpha_cpu > 0.5)
+
+    if len(xs) > 0:
+        x1, x2 = xs.min(), xs.max() + 1
+        y1, y2 = ys.min(), ys.max() + 1
+        source = source[y1:y2, x1:x2]
+        alpha = alpha[y1:y2, x1:x2]
+        crop_height, crop_width = y2 - y1, x2 - x1
+
+        # Keep a small border around the crop so feathering does not get
+        # clipped at the original hard bounding box.
+        feather = max(0.0, float(edge_feather))
+        pad = max(1, int(np.ceil(feather * 3.0))) if feather > 0 else 0
+        if pad:
+            source = F.pad(source.permute(2, 0, 1), (pad, pad, pad, pad), mode="replicate").permute(1, 2, 0)
+            alpha = F.pad(alpha.unsqueeze(0).unsqueeze(0), (pad, pad, pad, pad), mode="constant", value=0.0)[0, 0]
+            crop_height, crop_width = alpha.shape
+            if feather > 0:
+                alpha_image = Image.fromarray(np.clip(alpha.detach().cpu().numpy() * 255.0, 0, 255).astype(np.uint8), "L")
+                alpha = torch.from_numpy(np.asarray(alpha_image.filter(ImageFilter.GaussianBlur(feather)), dtype=np.float32) / 255.0).to(device=image.device, dtype=image.dtype)
+        side = max(crop_height, crop_width)
+    else:
+        source = source[:0, :0]
+        alpha = alpha[:0, :0]
+        crop_height = crop_width = 0
+        side = max(height, width)
+
+    if crop_height > 0:
+        masked_source = source * alpha.unsqueeze(-1)
+        output = torch.zeros((1, side, side, 4), dtype=image.dtype, device=image.device)
+        offset_y = (side - crop_height) // 2
+        offset_x = (side - crop_width) // 2
+        output[0, offset_y:offset_y + crop_height, offset_x:offset_x + crop_width, :3] = masked_source
+        output[0, offset_y:offset_y + crop_height, offset_x:offset_x + crop_width, 3] = alpha
+    else:
+        output = torch.zeros((1, side, side, 4), dtype=image.dtype, device=image.device)
+
+    if side > 1024:
+        output = F.interpolate(
+            output.permute(0, 3, 1, 2), size=(1024, 1024), mode="bilinear", align_corners=False
+        ).permute(0, 2, 3, 1)
+    return output
 
 
 from .model_manager import get_available_models, get_model_path, download_sam3_model
@@ -257,6 +312,14 @@ class TBGSam3Segmentation:
                     "label_off": "Keep Holes",
                     "tooltip": "When enabled, fills holes inside each mask (solid segments)."
                 }),
+                "edge_feather": ("FLOAT", {
+                    "default": 1.25,
+                    "min": 0.0,
+                    "max": 8.0,
+                    "step": 0.25,
+                    "display": "slider",
+                    "tooltip": "Softens the alpha edge in the TRELLIS-ready RGBA output. 0 keeps a hard edge.",
+                }),
 
             },
             "optional": {
@@ -276,14 +339,14 @@ class TBGSam3Segmentation:
             }
         }
 
-    RETURN_TYPES = ("MASK", "IMAGE", "STRING", "STRING", "SEGS", "MASK", "SEGS")
-    RETURN_NAMES = ("masks", "visualization", "boxes", "scores", "segs", "combined_mask", "combined_segs")
+    RETURN_TYPES = ("MASK", "IMAGE", "STRING", "STRING", "SEGS", "MASK", "SEGS", "IMAGE")
+    RETURN_NAMES = ("masks", "visualization", "boxes", "scores", "segs", "combined_mask", "combined_segs", "combined_segments_rgba")
     FUNCTION = "segment"
     CATEGORY = "TBG/SAM3"
 
     def segment(self, sam3_model, image, confidence_threshold=0.2, detect_all=True,
                 pipeline_mode="all", instances=False, crop_factor=1.5, min_size=32,
-                fill_holes=False, text_prompt="", sam3_selectors_pipe=None,
+                fill_holes=False, edge_feather=1.25, text_prompt="", sam3_selectors_pipe=None,
                 mask_prompt=None, exemplar_box=None, exemplar_mask=None,
                 max_detections=10):
 
@@ -442,7 +505,7 @@ class TBGSam3Segmentation:
                 empty_mask = _torch.zeros(1, h, w, device=masks.device)
                 empty_segs = ((height, width), [])
                 offload_model_if_needed(sam3_model)
-                return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs)
+                return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs, _combined_segments_rgba(image, empty_mask))
 
         if masks is None or len(masks) == 0:
             print(f"[SAM3] No detections found at threshold {confidence_threshold}")
@@ -450,7 +513,7 @@ class TBGSam3Segmentation:
             empty_mask = torch.zeros(1, h, w)
             empty_segs = ((height, width), [])
             offload_model_if_needed(sam3_model)
-            return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs)
+            return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs, _combined_segments_rgba(image, empty_mask))
 
         # --- Instance filtering using ONLY user positive prompts ---
         if instances and boxes is not None:
@@ -534,7 +597,7 @@ class TBGSam3Segmentation:
                 empty_mask = torch.zeros(1, h, w, device=boxes.device if boxes is not None else "cpu")
                 empty_segs = ((height, width), [])
                 offload_model_if_needed(sam3_model)
-                return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs)
+                return (empty_mask, pil_to_comfy_image(pil_image), "[]", "[]", empty_segs, empty_mask, empty_segs, _combined_segments_rgba(image, empty_mask))
 
         # --- Limit by max_detections ---
         if actual_max_detections > 0 and len(masks) > actual_max_detections:
@@ -638,6 +701,7 @@ class TBGSam3Segmentation:
             combined_tensor = torch.zeros(1, h, w)
 
         combined_mask = masks_to_comfy_mask(combined_tensor)
+        combined_segments_rgba = _combined_segments_rgba(image, combined_tensor, edge_feather)
 
         vis_image = visualize_masks_on_image(pil_image, masks, boxes, scores, alpha=0.5)
         vis_tensor = pil_to_comfy_image(vis_image)
@@ -690,7 +754,7 @@ class TBGSam3Segmentation:
 
         offload_model_if_needed(sam3_model)
 
-        return (comfy_masks, vis_tensor, boxes_json, scores_json, segs, combined_mask, combined_segs)
+        return (comfy_masks, vis_tensor, boxes_json, scores_json, segs, combined_mask, combined_segs, combined_segments_rgba)
 
     def _build_segs(self, masks, boxes, scores, original_image, text_prompt, width, height):
         """
@@ -1239,9 +1303,6 @@ class TBGSAM3PromptCollector:
 
         print(f"[TBGSAM3PromptCollector] Points: +{len(pos_pts)} -{len(neg_pts)}, Boxes: +{len(pos_bxs)} -{len(neg_bxs)}")
 
-        # Get image dimensions
-        img_height, img_width = image.shape[1], image.shape[2]
-
         pipeline = {
             "positive_points": None,
             "negative_points": None,
@@ -1249,28 +1310,25 @@ class TBGSAM3PromptCollector:
             "negative_boxes": None
         }
 
-        def normalize_points(pts):
-            return [[p["x"] / img_width, p["y"] / img_height] for p in pts]
-
+        # Frontend sends [{x, y}] already in normalized [0, 1] range
         if pos_pts:
             pipeline["positive_points"] = {
-                "points": normalize_points(pos_pts),
+                "points": [[p["x"], p["y"]] for p in pos_pts],
                 "labels": [1] * len(pos_pts),
             }
 
         if neg_pts:
             pipeline["negative_points"] = {
-                "points": normalize_points(neg_pts),
+                "points": [[p["x"], p["y"]] for p in neg_pts],
                 "labels": [0] * len(neg_pts),
             }
 
+        # Frontend sends [{x1, y1, x2, y2}] in normalized [0, 1] range.
+        # Convert to SAM3 format [cx, cy, w, h].
         def convert_boxes(boxes):
             converted = []
             for b in boxes:
-                x1 = b["x1"] / img_width
-                y1 = b["y1"] / img_height
-                x2 = b["x2"] / img_width
-                y2 = b["y2"] / img_height
+                x1, y1, x2, y2 = b["x1"], b["y1"], b["x2"], b["y2"]
                 cx = (x1 + x2) / 2
                 cy = (y1 + y2) / 2
                 w = x2 - x1

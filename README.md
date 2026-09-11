@@ -1,4 +1,5 @@
 **Updated Release: ComfyUI-TBG-SAM3 — Now we can plug a cleaned-up SAM3 segment straight into TBG Enhanced Refiner or any SEGS-ready input, like the Impact Pack effortlessly! So whats new.**
+[Visit TBG enhanced tiled upscaler and refiner pro](https://github.com/Ltamann/ComfyUI-TBG-ETUR)
 
 # ComfyUI-TBG-SAM3
 
@@ -51,7 +52,7 @@ This update makes the TBG-SAM3 node set fully usable inside ComfyUI, adding bett
 - **TBG SAM3 Batch Selector**  
   Node for batch image processing without Impactpack
 
-- **`TBG SAM3 Depth Map**  
+- **TBG SAM3 Depth Map**  
   Node for depth estimation; simple implementation, and there are more advanced depth map methods available.
 
 

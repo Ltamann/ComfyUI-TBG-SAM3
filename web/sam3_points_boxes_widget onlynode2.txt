@@ -718,25 +718,11 @@ app.registerExtension({
         getMinHeight() {
           return 80;
         },
-        afterResize() {
-          // Redraw when the node is resized so canvas matches new dimensions
-          scheduleLayoutAndRedraw("after-resize");
-        },
         getValue() {
           return "";
         },
         setValue() {},
       });
-
-      // Enforce a stable minimum width so the node never collapses.
-      // DOMWidgetImpl.computeLayoutSize() returns minWidth: 0, which allows
-      // LiteGraph to shrink the node to near-zero when the wrapper briefly
-      // reports a smaller width during a forced layout recalculation.
-      const origComputeSize = nodeType.prototype.computeSize;
-      nodeType.prototype.computeSize = function () {
-        const [w, h] = origComputeSize ? origComputeSize.apply(this, arguments) : [0, 0];
-        return [Math.max(w, 200), h];
-      };
 
       dbg("DOM widget registered", !!domWidget);
 
