@@ -125,6 +125,13 @@ class TBGSAM3ModelLoaderAndDownloader:
                 "model_source": (model_sources, {"default": "local (auto-download)"}),
                 "device": (["cuda", "cpu"], {"default": "cuda"}),
             },
+            "optional": {
+                "hf_repo": ("STRING", {
+                    "default": "",
+                    "multiline": False,
+                    "tooltip": 'Optional Hugging Face repo override for "local (auto-download)". Leave blank to use facebook/sam3.'
+                }),
+            },
         }
 
     RETURN_TYPES = ("SAM3_MODEL",)
@@ -132,8 +139,8 @@ class TBGSAM3ModelLoaderAndDownloader:
     FUNCTION = "load_model"
     CATEGORY = "TBG/SAM3"
 
-    def load_model(self, model_source: str, device: str):
-        hf_repo  = "facebook/sam3"
+    def load_model(self, model_source: str, device: str, hf_repo: str = ""):
+        hf_repo = (hf_repo or "").strip() or "facebook/sam3"
 
         """
         Build and return a SAM3_MODEL dict:
